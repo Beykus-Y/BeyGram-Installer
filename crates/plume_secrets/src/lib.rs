@@ -223,7 +223,7 @@ mod tests {
     use super::*;
 
     fn mock_entry() -> keyring::Entry {
-        keyring::Entry::new_with_credential(Box::new(keyring::mock::Credential::default()))
+        keyring::Entry::new_with_credential(Box::new(keyring::mock::MockCredential::default()))
     }
 
     #[test]

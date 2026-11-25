@@ -26,18 +26,10 @@ pub struct V1ErrorDetail {
 }
 
 impl V1ErrorDetail {
-    pub fn to_error(&self, url: String) -> crate::Error {
-        let message = self
-            .detail
-            .clone()
-            .or(self.title.clone())
-            .unwrap_or_else(|| "Unknown API error".to_string());
-
+    pub fn to_error(&self) -> crate::Error {
         crate::Error::DeveloperApi {
-            url,
             result_code: self.result_code,
             http_code: self.status.parse().ok(),
-            message,
         }
     }
 }

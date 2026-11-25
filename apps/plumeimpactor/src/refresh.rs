@@ -23,7 +23,7 @@ impl Drop for RefreshGuard {
     fn drop(&mut self) {
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.remove(&self.udid);
-            log::debug!("Released lock for device {}", self.udid);
+            log::debug!("Released device refresh lock");
         }
     }
 }
@@ -84,14 +84,11 @@ impl RefreshDaemon {
                     // We check for active tasks here to prevent the background loop
                     // from even starting a wait if a manual refresh is already running.
                     if self.is_busy(udid) {
-                        log::info!(
-                            "Device {} is already being processed. Skipping this app for now.",
-                            udid
-                        );
+                        log::info!("A refresh is already in progress for the device");
                         continue;
                     }
 
-                    log::info!("App at {:?} needs refresh for device {}", app.path, udid);
+                    log::info!("An app is due for refresh");
 
                     let device = self
                         .connected_devices
@@ -101,16 +98,18 @@ impl RefreshDaemon {
 
                     let Some(device) = device else {
                         log::debug!(
-                            "App at {:?} is due for refresh on {}, but no matching connected device was found. Retrying in {} seconds.",
-                            app.path,
-                            udid,
+                            "A device due for refresh is disconnected. Retrying in {} seconds.",
                             self.check_interval.as_secs()
                         );
                         continue;
                     };
 
-                    if let Err(e) = self.refresh_app(&store, refresh_device, app, &device).await {
-                        log::error!("Error refreshing app: {}", e);
+                    if self
+                        .refresh_app(&store, refresh_device, app, &device)
+                        .await
+                        .is_err()
+                    {
+                        log::error!("Background app refresh failed");
                     }
                 }
             }
@@ -140,10 +139,7 @@ impl RefreshDaemon {
                 .lock()
                 .map_err(|_| "Failed to lock task registry")?;
             if tasks.contains(&device.udid) {
-                log::warn!(
-                    "Refresh already in progress for {}. Aborting duplicate.",
-                    device.udid
-                );
+                log::warn!("Skipped duplicate refresh");
                 return Ok(());
             }
             tasks.insert(device.udid.clone());
@@ -155,7 +151,7 @@ impl RefreshDaemon {
             tasks: self.active_tasks.clone(),
         };
 
-        log::info!("Starting refresh for app at {:?}", app.path);
+        log::info!("Starting app refresh");
 
         notify_rust::Notification::new()
             .summary("Impactor")
@@ -237,7 +233,7 @@ impl RefreshDaemon {
         self.update_refresh_schedule(store, refresh_device, app)
             .await?;
 
-        log::info!("Successfully refreshed app at {:?}", app.path);
+        log::info!("App refresh succeeded");
 
         notify_rust::Notification::new()
             .summary("Impactor")

@@ -7,7 +7,7 @@ use plume_core::Error;
 
 use crate::{GsaAccount, RefreshDevice};
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AccountStore {
     selected_account: Option<String>,      // Email
     accounts: HashMap<String, GsaAccount>, // Email -> GsaAccount

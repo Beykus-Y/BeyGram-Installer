@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct GsaAccount {
     email: String,
     first_name: String,
@@ -8,6 +8,12 @@ pub struct GsaAccount {
     xcode_gs_token: String,
     #[serde(default)]
     team_id: String,
+}
+
+impl std::fmt::Debug for GsaAccount {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("GsaAccount").finish_non_exhaustive()
+    }
 }
 
 impl GsaAccount {

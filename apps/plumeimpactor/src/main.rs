@@ -21,7 +21,7 @@ pub const APP_NAME: &str = "Impactor";
 pub const APP_NAME_VERSIONED: &str = concat!("Impactor", " - Version ", env!("CARGO_PKG_VERSION"));
 
 fn main() -> iced::Result {
-    env_logger::init();
+    plume_core::init_logging();
 
     rustls::crypto::ring::default_provider()
         .install_default()

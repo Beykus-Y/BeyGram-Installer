@@ -94,8 +94,8 @@ impl DeveloperSession {
         let mut headers = HeaderMap::new();
         headers.insert("Content-Type", HeaderValue::from_static("text/x-xml-plist"));
         headers.insert("Accept", HeaderValue::from_static("text/x-xml-plist"));
-        self.insert_identity_headers(&mut headers).await;
-        self.insert_anisette_headers(&mut headers).await;
+        self.insert_identity_headers(&mut headers)?;
+        self.insert_anisette_headers(&mut headers).await?;
 
         let mut body = body.unwrap_or_default();
         body.insert(
@@ -108,19 +108,15 @@ impl DeveloperSession {
         let mut buffer = Vec::new();
         plist::to_writer_xml(&mut buffer, &body)?;
 
-        log::debug!("QH Request to {}: {:?}", url, body);
-
         let response = request_builder.body(buffer).send().await?;
         let response_bytes = response.bytes().await?;
         let response_dict: Dictionary = plist::from_bytes(&response_bytes)?;
-
-        log::debug!("QH Response from {}: {:?}", url, response_dict);
 
         let response_meta: QHResponseMeta =
             plist::from_value(&Value::Dictionary(response_dict.clone()))?;
 
         if response_meta.result_code.as_signed().unwrap_or(0) != 0 {
-            return Err(response_meta.to_error(url.to_string()));
+            return Err(response_meta.to_error());
         }
 
         Ok(response_dict)
@@ -145,11 +141,11 @@ impl DeveloperSession {
             "X-Requested-With",
             HeaderValue::from_static("XMLHttpRequest"),
         );
-        self.insert_identity_headers(&mut headers).await;
+        self.insert_identity_headers(&mut headers)?;
         if let Some(RequestType::Get) = request_type {
             headers.insert("X-HTTP-Method-Override", HeaderValue::from_static("GET"));
         }
-        self.insert_anisette_headers(&mut headers).await;
+        self.insert_anisette_headers(&mut headers).await?;
 
         let mut request_builder = match request_type {
             Some(RequestType::Patch) => self.client.patch(url).headers(headers.clone()),
@@ -159,8 +155,6 @@ impl DeveloperSession {
             _ => self.client.get(url).headers(headers.clone()),
         };
 
-        log::debug!("V1 Request to {}: {:?}", url, &body);
-
         if let Some(body) = body {
             request_builder = request_builder.json(&body);
         }
@@ -168,51 +162,51 @@ impl DeveloperSession {
         let response = request_builder.send().await?;
         let response_text = response.text().await?;
 
-        log::debug!("V1 Response from {}: {}", url, response_text);
-
         let response_json: serde_json::Value = serde_json::from_str(&response_text)?;
 
         if let Ok(errors) = serde_json::from_value::<V1ErrorResponse>(response_json.clone()) {
-            return Err(errors.errors[0].to_error(url.to_string()));
+            return Err(errors.errors.first().ok_or(Error::Parse)?.to_error());
         }
 
         Ok(response_json)
     }
 
     // TODO: this can be deduplicated as well, for reuse in `fn build_2fa_headers`
-    async fn insert_identity_headers(&self, headers: &mut HeaderMap) {
+    fn insert_identity_headers(&self, headers: &mut HeaderMap) -> Result<(), Error> {
         headers.insert("Accept-Language", HeaderValue::from_static("en-us"));
         headers.insert("User-Agent", HeaderValue::from_static("Xcode"));
         headers.insert(
             "X-Apple-I-Identity-Id",
-            HeaderValue::from_str(&self.adsid).unwrap(),
+            crate::logging::sensitive_header(&self.adsid)?,
         );
         headers.insert(
             "X-Apple-GS-Token",
-            HeaderValue::from_str(&self.xcode_gs_token).unwrap(),
+            crate::logging::sensitive_header(&self.xcode_gs_token)?,
         );
+        Ok(())
     }
 
-    async fn insert_anisette_headers(&self, headers: &mut HeaderMap) {
-        let valid_anisette = self.get_anisette().await;
+    async fn insert_anisette_headers(&self, headers: &mut HeaderMap) -> Result<(), Error> {
+        let valid_anisette = self.get_anisette().await?;
         for (k, v) in valid_anisette.generate_headers(false, true, true) {
             headers.insert(
                 HeaderName::from_bytes(k.as_bytes()).unwrap(),
-                HeaderValue::from_str(&v).unwrap(),
+                crate::logging::sensitive_header(&v)?,
             );
         }
         if let Ok(locale) = valid_anisette.get_header("x-apple-locale") {
             headers.insert("X-Apple-Locale", HeaderValue::from_str(&locale).unwrap());
         }
+        Ok(())
     }
 
     // TODO: deduplicate?
-    pub async fn get_anisette(&self) -> AnisetteData {
+    pub async fn get_anisette(&self) -> Result<AnisetteData, Error> {
         let mut locked = self.anisette.lock().await;
         if locked.needs_refresh() {
-            *locked = locked.refresh().await.unwrap();
+            *locked = locked.refresh().await?;
         }
-        locked.clone()
+        Ok(locked.clone())
     }
 }
 

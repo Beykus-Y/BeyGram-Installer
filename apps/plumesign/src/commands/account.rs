@@ -1,4 +1,3 @@
-use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Ok, Result};
@@ -44,9 +43,6 @@ pub struct LoginArgs {
     /// Apple ID email
     #[arg(short = 'u', long = "username", value_name = "EMAIL")]
     pub username: Option<String>,
-    /// Password (will prompt if not provided)
-    #[arg(short = 'p', long = "password", value_name = "PASSWORD")]
-    pub password: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -128,7 +124,7 @@ pub async fn get_authenticated_account() -> Result<DeveloperSession> {
 
     let anisette_config = AnisetteConfiguration::default().set_configuration_path(get_data_path());
 
-    log::info!("Restoring session for {}...", gsa_account.email());
+    log::info!("Restoring saved Apple session");
 
     let session = DeveloperSession::new(
         gsa_account.adsid().clone(),
@@ -196,16 +192,9 @@ async fn login(args: LoginArgs) -> Result<()> {
         input.trim().to_string()
     };
 
-    let password = if let Some(pass) = args.password {
-        pass
-    } else {
-        print!("Enter password: ");
-        std::io::stdout().flush()?;
-
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
-        input.trim().to_string()
-    };
+    let password = dialoguer::Password::new()
+        .with_prompt("Apple ID password")
+        .interact()?;
 
     let login_closure = || -> std::result::Result<(String, String), String> {
         std::result::Result::Ok((username.clone(), password.clone()))
@@ -253,7 +242,7 @@ async fn certificates(args: CertificatesArgs) -> Result<()> {
 
     let p = session.qh_list_certs(&team_id).await?.certificates;
 
-    log::info!("{:#?}", p);
+    println!("{:#?}", p);
 
     Ok(())
 }
@@ -269,7 +258,7 @@ async fn devices(args: DevicesArgs) -> Result<()> {
 
     let p = session.qh_list_devices(&team_id).await?.devices;
 
-    log::info!("{:#?}", p);
+    println!("{:#?}", p);
 
     Ok(())
 }
@@ -288,7 +277,7 @@ async fn register_device(args: RegisterDeviceArgs) -> Result<()> {
         .await?
         .device;
 
-    log::info!("{:#?}", p);
+    println!("{:#?}", p);
 
     Ok(())
 }
@@ -321,7 +310,7 @@ pub async fn app_ids(args: AppIdsArgs) -> Result<()> {
 
     let p = session.v1_list_app_ids(&team_id, None).await?.data;
 
-    log::info!("{:#?}", p);
+    println!("{:#?}", p);
 
     Ok(())
 }
@@ -347,7 +336,7 @@ async fn list_accounts() -> Result<()> {
             ""
         };
 
-        log::info!(" [{}] {} {}", account.first_name(), email, selected);
+        println!(" [{}] {} {}", account.first_name(), email, selected);
     }
 
     Ok(())
@@ -366,7 +355,7 @@ async fn switch_account(args: SwitchArgs) -> Result<()> {
 
     settings.account_select(&args.email).await?;
 
-    log::info!("Switched to account: {}", args.email);
+    log::info!("Switched accounts");
 
     Ok(())
 }

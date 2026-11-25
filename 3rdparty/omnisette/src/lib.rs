@@ -37,11 +37,8 @@ pub enum AnisetteError {
     #[error("Request Error {0}")]
     ReqwestError(#[from] reqwest::Error),
     #[cfg(feature = "remote-anisette-v3")]
-    #[error("Provisioning socket error {0}")]
-    WsError(#[from] tokio_tungstenite::tungstenite::error::Error),
-    #[cfg(feature = "remote-anisette-v3")]
-    #[error("JSON error {0}")]
-    SerdeError(#[from] serde_json::Error),
+    #[error("Anisette provisioning socket failed")]
+    WsError,
     #[error("Anisette provisioning failed: {0}")]
     Provisioning(#[from] adi_proxy::ProvisioningError),
     #[error(transparent)]
@@ -58,6 +55,20 @@ pub enum AnisetteError {
     MissingLibraries,
     #[error("{0}")]
     Anyhow(#[from] anyhow::Error),
+}
+
+#[cfg(feature = "remote-anisette-v3")]
+impl From<tokio_tungstenite::tungstenite::Error> for AnisetteError {
+    fn from(_: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::WsError
+    }
+}
+
+#[cfg(feature = "remote-anisette-v3")]
+impl From<serde_json::Error> for AnisetteError {
+    fn from(_: serde_json::Error) -> Self {
+        adi_proxy::ProvisioningError::InvalidResponse.into()
+    }
 }
 
 pub const DEFAULT_ANISETTE_URL: &str = "https://ani.f1sh.me/";

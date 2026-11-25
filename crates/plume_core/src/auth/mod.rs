@@ -12,7 +12,7 @@ use crate::{Error, client};
 
 const GSA_ENDPOINT: &str = "https://gsa.apple.com/grandslam/GsService2";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Account {
     pub anisette: Arc<Mutex<AnisetteData>>,
     pub spd: Option<plist::Dictionary>,

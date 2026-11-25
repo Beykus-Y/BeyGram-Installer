@@ -319,10 +319,8 @@ mod tests {
     #[test]
     fn quota_exhaustion_requires_team_owner_action() {
         let error = certificate_request_error(Error::DeveloperApi {
-            url: String::new(),
             result_code: 7460,
             http_code: None,
-            message: "synthetic response".into(),
         });
 
         assert!(matches!(error, Error::Certificate(ref message) if message.contains("team owner")));

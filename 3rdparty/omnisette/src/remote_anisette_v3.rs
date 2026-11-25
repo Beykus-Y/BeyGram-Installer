@@ -137,7 +137,6 @@ struct ProvisionBodyData {
     request: Dictionary,
 }
 
-#[derive(Debug)]
 pub struct AnisetteData {
     machine_id: String,
     one_time_password: String,
@@ -215,7 +214,8 @@ impl AnisetteClient {
         let path = format!("{}/v3/client_info", url.as_str().trim_end_matches('/'));
         let client_info = checked(make_reqwest()?.get(path).send().await?)?
             .json::<AnisetteClientInfo>()
-            .await?;
+            .await
+            .map_err(|_| ProvisioningError::InvalidResponse)?;
         Ok(AnisetteClient { client_info, url })
     }
 
@@ -275,7 +275,8 @@ impl AnisetteClient {
 
         let headers = checked(http_client.post(path).json(&body).send().await?)?
             .json::<AnisetteHeaders>()
-            .await?;
+            .await
+            .map_err(|_| ProvisioningError::InvalidResponse)?;
         match headers {
             AnisetteHeaders::GetHeadersError { message } => {
                 if message.contains("-45061") {
