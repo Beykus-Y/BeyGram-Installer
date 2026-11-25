@@ -16,3 +16,11 @@ The latest code checkpoint is `04f9eb84736e52c6cb5e7c5aa6da762cbc550751`. The re
 Locked metadata resolved. The native CI rerun built both binaries and completed Clippy on Ubuntu, Windows and macOS. The two live Anisette tests failed on all runners. Rustfmt reproduces upstream differences locally and in CI. The Debian container retry built both binaries and the CLI help command ran. Workspace tests compiled and reported two Anisette errors, and local Clippy completed with warnings. See [BUILD.md](BUILD.md) for exact commands, versions and logs. RustSec found advisories. No physical device testing has happened.
 
 For the remaining CI work, reproduce the two Anisette failures with `cargo test --locked -p omnisette --lib --features remote-anisette-v3`, define a deterministic test fixture, and review the baseline rustfmt diff. Keep the PR in draft while verification is incomplete. Issue #2 requires two real IPA artifacts and a separate device/team test without publishing credentials.
+
+## MVP 0.1 checkpoints
+
+- `737fd1a` applies the baseline rustfmt diff in a dedicated commit.
+- `31ca5e7` removes the Developer API revocation call and GUI confirmation path. Quota error 7460 requires the team owner to manage certificates in Apple's portal.
+- Anisette uses HTTPS with certificate verification and rejects redirects. Apple provisioning URLs must use `gsa.apple.com:443`. The remote transport uses WSS and explicit provider selection. CLI, GUI and refresh use local StoreServicesCore by default. The focused Anisette suite passed locally on Linux. See [BUILD.md](BUILD.md) for the separate live target.
+
+Next P0 work is protecting account tokens, signing keys and pairing records, then verifying diagnostic logging. P3 advisory applicability and licensing work remain open. Keep PR #10 in draft pending the full native matrix and security criteria.

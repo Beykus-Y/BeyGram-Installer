@@ -45,3 +45,26 @@ The [post-fix PR run](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs
 | macOS 15 | Passed | Built | Two Anisette failures | Passed with warnings |
 
 On all three runners, `store_services_core::tests::fetch_anisette_ssc_async` returned `MissingLibraries`. `remote_anisette_v3::tests::fetch_anisette_remote_v3` failed because Rustls could not choose a process-level crypto provider. The GUI and CLI binaries explicitly install one, while the test harness does not. Reproduce these cases with `cargo +1.100.0 test --locked -p omnisette --lib --features remote-anisette-v3`. The format job still reports the upstream differences. None of these checks was disabled.
+
+## MVP 0.1 Anisette checks
+
+```sh
+cargo +1.100.0 test --locked -p omnisette --features remote-anisette-v3
+```
+
+The deterministic suite uses a synthetic Apple URL-bag plist and loopback HTTPS/WSS peers. It checks rejection of an unknown certificate, rejection of redirect responses and untrusted Apple provisioning URLs, and failure without an automatic provider switch. Both live tests are in the separate `live_anisette` target and retain failure reporting when run explicitly.
+
+StoreServicesCore expects an approved, architecture-matched set of proprietary libraries in `<data-dir>/lib/<architecture>/`, including `libstoreservicescore.so` and its dependencies. Architecture directory names are `x86_64`, `x86`, `arm64-v8a` and `armeabi-v7a`. Use a dedicated test data directory with a verified, lawfully obtained library set.
+
+```sh
+BEYGRAM_LIVE_LOCAL_DIR=/path/to/dedicated/local-data \
+  cargo +1.100.0 test --locked -p omnisette --features remote-anisette-v3 \
+  --test live_anisette local_store_services_core -- --ignored
+
+BEYGRAM_LIVE_REMOTE_DIR=/path/to/dedicated/remote-data \
+BEYGRAM_LIVE_ANISETTE_URL=https://approved.example \
+  cargo +1.100.0 test --locked -p omnisette --features remote-anisette-v3 \
+  --test live_anisette remote_v3 -- --ignored
+```
+
+The remote check communicates with the selected service and Apple and creates provisioning state. Use it only after approving the provider and its handling of the provisioning identifier, Apple intermediates, ADI blob and client IP. Neither check needs an Apple ID. The former local failure required absent proprietary libraries. The standalone remote harness now declares the Tokio test and Chrono clock features explicitly and installs a Rustls crypto provider before transport setup. A non-success HTTP response is now reported by status. Invalid plist or unexpected structure is reported as an invalid provisioning response. The precise upstream payload behind the historical local plist error was not captured.
