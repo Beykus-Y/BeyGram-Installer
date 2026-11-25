@@ -12,6 +12,7 @@ env:
 
 jobs:
   build-linux:
+    if: github.repository == 'claration/impactor'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -41,6 +42,7 @@ jobs:
           path: dist/*
 
   build-windows:
+    if: github.repository == 'claration/impactor'
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -123,6 +125,7 @@ jobs:
           path: dist/Impactor-windows-${{ matrix.arch }}-setup.exe
 
   build-macos-slices:
+    if: github.repository == 'claration/impactor'
     strategy:
       matrix:
         include:
