@@ -359,16 +359,26 @@ impl RefreshDaemon {
             .unwrap_or_else(|_| Utc::now() + chrono::Duration::days(4));
         let scheduled_refresh = scheduled_refresh - chrono::Duration::days(3);
 
-        let mut store = store.clone();
-        let mut updated_device = refresh_device.clone();
+        let mut latest = AccountStore::load(&store.path())
+            .await
+            .map_err(|err| format!("Failed to reload refresh schedule: {err}"))?;
+        let Some(mut updated_device) = latest.get_refresh_device(&refresh_device.udid).cloned()
+        else {
+            return Ok(());
+        };
+        let Some(existing_app) = updated_device
+            .apps
+            .iter_mut()
+            .find(|entry| entry.path == app.path)
+        else {
+            return Ok(());
+        };
+        existing_app.scheduled_refresh = scheduled_refresh;
 
-        if let Some(existing_app) = updated_device.apps.iter_mut().find(|a| a.path == app.path) {
-            existing_app.scheduled_refresh = scheduled_refresh;
-        }
-
-        store
-            .add_or_update_refresh_device_sync(updated_device)
-            .map_err(|e| format!("Failed to update refresh schedule: {}", e))?;
+        latest
+            .add_or_update_refresh_device(updated_device)
+            .await
+            .map_err(|err| format!("Failed to update refresh schedule: {err}"))?;
 
         log::info!("Next refresh scheduled for: {}", scheduled_refresh);
 

@@ -17,6 +17,8 @@ pub struct AccountStore {
     locale: Option<String>, // None = system locale
     #[serde(skip)]
     path: Option<PathBuf>,
+    #[serde(skip)]
+    revision: Option<plume_secrets::Revision>,
 }
 
 impl AccountStore {
@@ -31,25 +33,37 @@ impl AccountStore {
         let Some(path) = path else {
             return Ok(Self::default());
         };
-        let mut settings = plume_secrets::read_or_migrate(path, |bytes| {
+        let saved = plume_secrets::read_or_migrate_with_revision(path, |bytes| {
             Ok::<Self, Error>(serde_json::from_slice(bytes)?)
-        })?
-        .unwrap_or_default();
+        })?;
+        let mut settings = Self::default();
+        if let Some((stored, revision)) = saved {
+            settings = stored;
+            settings.revision = Some(revision);
+        }
         settings.path = Some(path.clone());
         Ok(settings)
     }
 
-    pub async fn save(&self) -> Result<(), Error> {
-        let store = self.clone();
-        tokio::task::spawn_blocking(move || store.save_sync())
-            .await
-            .map_err(std::io::Error::other)?
+    async fn save(&mut self) -> Result<(), Error> {
+        let mut store = self.clone();
+        self.revision = tokio::task::spawn_blocking(move || {
+            store.save_sync()?;
+            Ok::<_, Error>(store.revision)
+        })
+        .await
+        .map_err(std::io::Error::other)??;
+        Ok(())
     }
 
-    pub fn save_sync(&self) -> Result<(), Error> {
+    fn save_sync(&mut self) -> Result<(), Error> {
         if let Some(path) = &self.path {
             let bytes = zeroize::Zeroizing::new(serde_json::to_vec(self)?);
-            plume_secrets::write(path, &bytes)?;
+            self.revision = Some(plume_secrets::write_if_current(
+                path,
+                &bytes,
+                self.revision,
+            )?);
         }
         Ok(())
     }

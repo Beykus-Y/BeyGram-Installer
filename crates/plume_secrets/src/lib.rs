@@ -24,10 +24,26 @@ pub enum Error {
     MissingKey,
     #[error("Secret record failed authentication")]
     Authentication,
+    #[error("Secret record changed in another process. Reload it and retry.")]
+    Conflict,
     #[error("Could not generate encryption material")]
     Random,
     #[error("Could not access secret file: {0}")]
     Io(#[from] io::Error),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Revision([u8; 32]);
+
+impl Revision {
+    fn for_ciphertext(ciphertext: &[u8]) -> Self {
+        Self(
+            digest::digest(&digest::SHA256, ciphertext)
+                .as_ref()
+                .try_into()
+                .unwrap(),
+        )
+    }
 }
 
 /// Read a record, replacing valid legacy plaintext in place after it has been encrypted.
@@ -36,6 +52,16 @@ pub fn read_or_migrate<T, E>(
     path: &Path,
     decode: impl FnOnce(&[u8]) -> Result<T, E>,
 ) -> Result<Option<T>, E>
+where
+    E: From<Error>,
+{
+    Ok(read_or_migrate_with_revision(path, decode)?.map(|(value, _)| value))
+}
+
+pub fn read_or_migrate_with_revision<T, E>(
+    path: &Path,
+    decode: impl FnOnce(&[u8]) -> Result<T, E>,
+) -> Result<Option<(T, Revision)>, E>
 where
     E: From<Error>,
 {
@@ -49,7 +75,7 @@ fn read_locked<T, E>(
     locked: &LockedFile<'_>,
     key: impl FnOnce(bool) -> Result<LessSafeKey, Error>,
     decode: impl FnOnce(&[u8]) -> Result<T, E>,
-) -> Result<Option<T>, E>
+) -> Result<Option<(T, Revision)>, E>
 where
     E: From<Error>,
 {
@@ -60,11 +86,14 @@ where
     };
     if let Some(ciphertext) = bytes.strip_prefix(MAGIC) {
         let plaintext = decrypt(&key(false)?, &locked.id, ciphertext)?;
-        Ok(Some(decode(&plaintext)?))
+        Ok(Some((
+            decode(&plaintext)?,
+            Revision::for_ciphertext(ciphertext),
+        )))
     } else {
         let decoded = decode(&bytes)?;
-        locked.save(&key(true)?, &bytes)?;
-        Ok(Some(decoded))
+        let revision = locked.save(&key(true)?, &bytes)?;
+        Ok(Some((decoded, revision)))
     }
 }
 
@@ -76,22 +105,59 @@ pub fn prepare(path: &Path) -> Result<(), Error> {
 }
 
 pub fn write(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    write_checked(path, bytes, None).map(|_| ())
+}
+
+/// Replace a record only if its current revision matches the one the caller read.
+pub fn write_if_current(
+    path: &Path,
+    bytes: &[u8],
+    revision: Option<Revision>,
+) -> Result<Revision, Error> {
+    write_checked(path, bytes, Some(revision))
+}
+
+fn write_checked(
+    path: &Path,
+    bytes: &[u8],
+    expected: Option<Option<Revision>>,
+) -> Result<Revision, Error> {
     let locked = LockedFile::open(path, true)?.ok_or(Error::Authentication)?;
-    // Check for a previously encrypted record before creating a new key. Data
-    // encrypted with a missing key must remain available for recovery.
-    match fs::read(path) {
+    write_locked(&locked, bytes, expected, |create| {
+        get_key(&locked.entry()?, create)
+    })
+}
+
+fn write_locked(
+    locked: &LockedFile<'_>,
+    bytes: &[u8],
+    expected: Option<Option<Revision>>,
+    key: impl FnOnce(bool) -> Result<LessSafeKey, Error>,
+) -> Result<Revision, Error> {
+    match fs::read(locked.path) {
         Ok(existing) => {
             let existing = Zeroizing::new(existing);
             if let Some(ciphertext) = existing.strip_prefix(MAGIC) {
-                let key = get_key(&locked.entry()?, false)?;
+                if expected.is_some_and(|value| value != Some(Revision::for_ciphertext(ciphertext)))
+                {
+                    return Err(Error::Conflict);
+                }
+                let key = key(false)?;
                 decrypt(&key, &locked.id, ciphertext)?;
                 return locked.save(&key, bytes);
             }
+            if expected.is_some() {
+                return Err(Error::Conflict);
+            }
         }
-        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if expected.flatten().is_some() {
+                return Err(Error::Conflict);
+            }
+        }
         Err(err) => return Err(err.into()),
     }
-    locked.save(&get_key(&locked.entry()?, true)?, bytes)
+    locked.save(&key(true)?, bytes)
 }
 
 struct LockedFile<'a> {
@@ -147,7 +213,7 @@ impl<'a> LockedFile<'a> {
         keyring::Entry::new("BeyGram Installer", &self.id).map_err(|_| Error::VaultUnavailable)
     }
 
-    fn save(&self, key: &LessSafeKey, bytes: &[u8]) -> Result<(), Error> {
+    fn save(&self, key: &LessSafeKey, bytes: &[u8]) -> Result<Revision, Error> {
         let ciphertext = encrypt(key, &self.id, bytes)?;
         let parent = self
             .path
@@ -159,7 +225,7 @@ impl<'a> LockedFile<'a> {
         temp.write_all(&ciphertext)?;
         temp.as_file().sync_all()?;
         temp.persist(self.path).map_err(|err| err.error)?;
-        Ok(())
+        Ok(Revision::for_ciphertext(&ciphertext))
     }
 }
 
@@ -237,13 +303,19 @@ mod tests {
         let decode = |bytes: &[u8]| Ok::<_, Error>(bytes.to_vec());
 
         let migrated = read_locked(&locked, |create| get_key(&entry, create), decode).unwrap();
-        assert_eq!(migrated.as_deref(), Some(marker.as_slice()));
+        assert_eq!(
+            migrated.as_ref().map(|(bytes, _)| bytes.as_slice()),
+            Some(marker.as_slice())
+        );
         let mut file = fs::read(&path).unwrap();
         assert!(file.starts_with(MAGIC));
         assert!(!file.windows(marker.len()).any(|part| part == marker));
 
         let reopened = read_locked(&locked, |create| get_key(&entry, create), decode).unwrap();
-        assert_eq!(reopened.as_deref(), Some(marker.as_slice()));
+        assert_eq!(
+            reopened.as_ref().map(|(bytes, _)| bytes.as_slice()),
+            Some(marker.as_slice())
+        );
         assert!(matches!(
             read_locked(&locked, |create| get_key(&mock_entry(), create), decode),
             Err(Error::MissingKey)
@@ -254,6 +326,22 @@ mod tests {
         assert!(matches!(
             read_locked(&locked, |create| get_key(&entry, create), decode),
             Err(Error::Authentication)
+        ));
+    }
+
+    #[test]
+    fn a_stale_snapshot_cannot_restore_removed_credentials() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("fixture");
+        let locked = LockedFile::open(&path, true).unwrap().unwrap();
+        let entry = mock_entry();
+        let key = |create| get_key(&entry, create);
+        let original = write_locked(&locked, b"synthetic token", Some(None), key).unwrap();
+        write_locked(&locked, b"empty", Some(Some(original)), key).unwrap();
+
+        assert!(matches!(
+            write_locked(&locked, b"synthetic token", Some(Some(original)), key),
+            Err(Error::Conflict)
         ));
     }
 
