@@ -21,53 +21,35 @@ pub struct AccountStore {
 
 impl AccountStore {
     pub async fn load(path: &Option<PathBuf>) -> Result<Self, Error> {
-        if let Some(path) = path {
-            let mut settings = if !path.exists() {
-                Self::default()
-            } else {
-                let contents = tokio::fs::read_to_string(path).await?;
-                serde_json::from_str(&contents)?
-            };
-            settings.path = Some(path.clone());
-            Ok(settings)
-        } else {
-            Ok(Self::default())
-        }
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || Self::load_sync(&path))
+            .await
+            .map_err(std::io::Error::other)?
     }
 
     pub fn load_sync(path: &Option<PathBuf>) -> Result<Self, Error> {
-        if let Some(path) = path {
-            let mut settings = if !path.exists() {
-                Self::default()
-            } else {
-                let contents = std::fs::read_to_string(path)?;
-                serde_json::from_str(&contents)?
-            };
-            settings.path = Some(path.clone());
-            Ok(settings)
-        } else {
-            Ok(Self::default())
-        }
+        let Some(path) = path else {
+            return Ok(Self::default());
+        };
+        let mut settings = plume_secrets::read_or_migrate(path, |bytes| {
+            Ok::<Self, Error>(serde_json::from_slice(bytes)?)
+        })?
+        .unwrap_or_default();
+        settings.path = Some(path.clone());
+        Ok(settings)
     }
 
     pub async fn save(&self) -> Result<(), Error> {
-        if let Some(path) = &self.path {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-
-            tokio::fs::write(path, serde_json::to_string_pretty(self)?).await?;
-        }
-        Ok(())
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.save_sync())
+            .await
+            .map_err(std::io::Error::other)?
     }
 
     pub fn save_sync(&self) -> Result<(), Error> {
         if let Some(path) = &self.path {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            std::fs::write(path, serde_json::to_string_pretty(self)?)?;
+            let bytes = zeroize::Zeroizing::new(serde_json::to_vec(self)?);
+            plume_secrets::write(path, &bytes)?;
         }
         Ok(())
     }

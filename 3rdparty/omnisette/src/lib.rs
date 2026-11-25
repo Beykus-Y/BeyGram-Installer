@@ -44,6 +44,8 @@ pub enum AnisetteError {
     SerdeError(#[from] serde_json::Error),
     #[error("Anisette provisioning failed: {0}")]
     Provisioning(#[from] adi_proxy::ProvisioningError),
+    #[error(transparent)]
+    SecretStorage(#[from] plume_secrets::Error),
     #[error("IO error {0}")]
     IOError(#[from] io::Error),
     #[error("ADI error {0}")]

@@ -267,61 +267,70 @@ impl Device {
         provider: &UsbmuxdProvider,
         path: PathBuf,
     ) -> Result<RpPairingFile, Error> {
+        if self.udid.is_empty()
+            || !self
+                .udid
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(Error::Other("Invalid device identifier".into()));
+        }
         let pairing_file_path = path.join(format!("plume_{}.plist", self.udid));
 
-        if pairing_file_path.exists() {
-            return Ok(RpPairingFile::read_from_file(pairing_file_path).await?);
-        } else {
-            let cdp = CoreDeviceProxy::connect(provider).await?;
-            let cdp_port = cdp.tunnel_info().server_rsd_port;
-            let cdp_adapter = cdp.create_software_tunnel()?;
-            let mut cdp_adapter = cdp_adapter.to_async_handle();
-
-            let cdp_stream = cdp_adapter.connect(cdp_port).await?;
-            let cdp_handshake = RsdHandshake::new(cdp_stream).await?;
-
-            let tunnel_service = cdp_handshake
-                .services
-                .get("com.apple.internal.dt.coredevice.untrusted.tunnelservice")
-                .ok_or_else(|| Error::Other("Tunnel service not found".to_string()))?;
-
-            let tunnel_service_stream = cdp_adapter.connect(tunnel_service.port).await?;
-            let mut remote_xpc = RemoteXpcClient::new(tunnel_service_stream).await?;
-            remote_xpc.do_handshake().await?;
-            let _ = remote_xpc.recv_root().await;
-
-            let suffix: String = uuid::Uuid::new_v4()
-                .simple()
-                .to_string()
-                .chars()
-                .take(6)
-                .collect();
-
-            let hostname = format!("plume-{}", suffix);
-
-            let mut pairing_file = RpPairingFile::generate(&hostname);
-            let mut pairing_client =
-                RemotePairingClient::new(remote_xpc, &hostname, &mut pairing_file);
-            pairing_client
-                .connect(async |_| "000000".to_string(), ())
-                .await?;
-
-            let tunnel_service_stream = cdp_adapter.connect(tunnel_service.port).await?;
-            let mut remote_xpc = RemoteXpcClient::new(tunnel_service_stream).await?;
-            remote_xpc.do_handshake().await?;
-            let _ = remote_xpc.recv_root().await;
-            let mut pairing_client =
-                RemotePairingClient::new(remote_xpc, &hostname, &mut pairing_file);
-            pairing_client
-                .connect(async |_| "000000".to_string(), ())
-                .await?;
-
-            let pairing_file_bytes = pairing_file.to_bytes();
-
-            tokio::fs::write(&pairing_file_path, &pairing_file_bytes).await?;
-
-            Ok(pairing_file)
+        if let Some(record) = plume_secrets::read_or_migrate(&pairing_file_path, |bytes| {
+            Ok::<_, Error>(RpPairingFile::from_bytes(bytes)?)
+        })? {
+            return Ok(record);
         }
+        plume_secrets::prepare(&pairing_file_path)?;
+
+        let cdp = CoreDeviceProxy::connect(provider).await?;
+        let cdp_port = cdp.tunnel_info().server_rsd_port;
+        let cdp_adapter = cdp.create_software_tunnel()?;
+        let mut cdp_adapter = cdp_adapter.to_async_handle();
+
+        let cdp_stream = cdp_adapter.connect(cdp_port).await?;
+        let cdp_handshake = RsdHandshake::new(cdp_stream).await?;
+
+        let tunnel_service = cdp_handshake
+            .services
+            .get("com.apple.internal.dt.coredevice.untrusted.tunnelservice")
+            .ok_or_else(|| Error::Other("Tunnel service not found".to_string()))?;
+
+        let tunnel_service_stream = cdp_adapter.connect(tunnel_service.port).await?;
+        let mut remote_xpc = RemoteXpcClient::new(tunnel_service_stream).await?;
+        remote_xpc.do_handshake().await?;
+        let _ = remote_xpc.recv_root().await;
+
+        let suffix: String = uuid::Uuid::new_v4()
+            .simple()
+            .to_string()
+            .chars()
+            .take(6)
+            .collect();
+
+        let hostname = format!("plume-{}", suffix);
+
+        let mut pairing_file = RpPairingFile::generate(&hostname);
+        let mut pairing_client = RemotePairingClient::new(remote_xpc, &hostname, &mut pairing_file);
+        pairing_client
+            .connect(async |_| "000000".to_string(), ())
+            .await?;
+
+        let tunnel_service_stream = cdp_adapter.connect(tunnel_service.port).await?;
+        let mut remote_xpc = RemoteXpcClient::new(tunnel_service_stream).await?;
+        remote_xpc.do_handshake().await?;
+        let _ = remote_xpc.recv_root().await;
+        let mut pairing_client = RemotePairingClient::new(remote_xpc, &hostname, &mut pairing_file);
+        pairing_client
+            .connect(async |_| "000000".to_string(), ())
+            .await?;
+
+        let pairing_file_bytes = pairing_file.to_bytes();
+
+        plume_secrets::write(&pairing_file_path, &pairing_file_bytes)?;
+
+        Ok(pairing_file)
     }
 
     pub async fn install_app<F, Fut>(

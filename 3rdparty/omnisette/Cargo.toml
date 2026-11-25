@@ -21,6 +21,7 @@ remote-anisette-v3 = [
 aos-kit = []
 
 [dependencies]
+plume_secrets = { path = "../../crates/plume_secrets" }
 sha2.workspace = true
 base64.workspace = true
 rand.workspace = true

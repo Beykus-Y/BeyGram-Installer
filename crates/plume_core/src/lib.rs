@@ -47,6 +47,8 @@ pub enum Error {
     Parse, // TODO: better parsing errors
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    SecretStorage(#[from] plume_secrets::Error),
     #[error("Plist error: {0}")]
     Plist(#[from] plist::Error),
     #[error("Codesign error: {0}")]

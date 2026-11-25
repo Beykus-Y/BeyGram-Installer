@@ -118,8 +118,13 @@ impl Impactor {
     pub fn new() -> (Self, Task<Message>) {
         let mut tray = ImpactorTray::new();
         let store = Self::init_account_store_sync();
-        tray.update_refresh_apps(&store);
-        let selected_locale = store.locale().map(str::to_string);
+        if let Some(store) = &store {
+            tray.update_refresh_apps(store);
+        }
+        let selected_locale = store
+            .as_ref()
+            .and_then(AccountStore::locale)
+            .map(str::to_string);
         if let Some(code) = &selected_locale {
             rust_i18n::set_locale(code);
         }
@@ -142,7 +147,7 @@ impl Impactor {
                 selected_device: None,
                 tray: Some(tray),
                 main_window,
-                account_store: Some(store),
+                account_store: store,
                 login_windows: std::collections::HashMap::new(),
                 pending_installation: false,
                 selected_locale,
@@ -151,9 +156,15 @@ impl Impactor {
         )
     }
 
-    fn init_account_store_sync() -> AccountStore {
+    fn init_account_store_sync() -> Option<AccountStore> {
         let path = defaults::get_data_path().join("accounts.json");
-        AccountStore::load_sync(&Some(path)).unwrap_or_default()
+        match AccountStore::load_sync(&Some(path)) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                log::error!("Unable to load account store: {error}");
+                None
+            }
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -391,12 +402,12 @@ impl Impactor {
 
                     if matches!(
                         msg,
-                        login_window::Message::LoginSuccess(_)
+                        login_window::Message::LoginSuccess
                             | login_window::Message::LoginCancel
                             | login_window::Message::TwoFactorCancel
                     ) {
                         self.login_windows.remove(&id);
-                        self.account_store = Some(Self::init_account_store_sync());
+                        self.account_store = Self::init_account_store_sync();
 
                         if let ImpactorScreen::Settings(_) = self.current_screen {
                             self.current_screen =
@@ -404,7 +415,7 @@ impl Impactor {
                         }
 
                         if self.pending_installation {
-                            if matches!(msg, login_window::Message::LoginSuccess(_)) {
+                            if matches!(msg, login_window::Message::LoginSuccess) {
                                 self.pending_installation = false;
                                 return Task::batch(vec![
                                     window::close(id),
@@ -499,8 +510,17 @@ impl Impactor {
                                         .build()
                                         .unwrap();
 
-                                    let _ = rt.block_on(async move {
-                                        crate::subscriptions::export_certificate(account).await
+                                    rt.block_on(async move {
+                                        if let Err(error) =
+                                            crate::subscriptions::export_certificate(account).await
+                                        {
+                                            rfd::AsyncMessageDialog::new()
+                                                .set_level(rfd::MessageLevel::Error)
+                                                .set_title("Certificate export failed")
+                                                .set_description(error)
+                                                .show()
+                                                .await;
+                                        }
                                     });
                                 });
                             }
@@ -557,7 +577,7 @@ impl Impactor {
                                 {
                                     log::error!("Failed to update team: {:?}", e);
                                 } else {
-                                    self.account_store = Some(Self::init_account_store_sync());
+                                    self.account_store = Self::init_account_store_sync();
                                 }
                             }
                             screen.update(msg).map(Message::SettingsScreen)
@@ -738,13 +758,13 @@ impl Impactor {
                             let _ = store.add_or_update_refresh_device_sync(refresh_device);
                         }
 
-                        self.account_store = Some(Self::init_account_store_sync());
+                        self.account_store = Self::init_account_store_sync();
                     }
                 }
                 Task::done(Message::UpdateTrayMenu)
             }
             Message::UpdateTrayMenu => {
-                self.account_store = Some(Self::init_account_store_sync());
+                self.account_store = Self::init_account_store_sync();
 
                 if let Some(store) = &self.account_store {
                     match &mut self.tray {

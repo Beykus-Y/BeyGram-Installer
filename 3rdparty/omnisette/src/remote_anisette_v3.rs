@@ -1,6 +1,6 @@
 // Implementing the SideStore Anisette v3 protocol
 
-use std::{collections::HashMap, fs, io::Cursor, path::PathBuf};
+use std::{collections::HashMap, io::Cursor, path::PathBuf};
 
 use crate::adi_proxy::{LOOKUP_CLIENT_INFO, ProvisioningError};
 use crate::transport::{
@@ -480,25 +480,25 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
         }
         let client = self.client.as_ref().unwrap();
 
-        fs::create_dir_all(&self.configuration_path)?;
-
         // A newly selected service must never receive another service's ADI blob.
         let provider_id = encode_hex(&Sha256::digest(client.url.as_str().as_bytes()));
         let config_path = self
             .configuration_path
             .join(format!("state-{provider_id}.plist"));
         if self.state.is_none() {
-            self.state = Some(if let Ok(text) = plist::from_file(&config_path) {
-                text
-            } else {
-                AnisetteState::new()
-            });
+            self.state = Some(
+                plume_secrets::read_or_migrate(&config_path, |bytes| {
+                    Ok::<AnisetteState, AnisetteError>(plist::from_bytes(bytes)?)
+                })?
+                .unwrap_or_default(),
+            );
         }
 
         let state = self.state.as_mut().unwrap();
         if !state.is_provisioned() {
+            plume_secrets::prepare(&config_path)?;
             client.provision(state).await?;
-            plist::to_file_xml(&config_path, state)?;
+            plume_secrets::write(&config_path, &plist_to_buf(state)?)?;
         }
         let data = match client.get_headers(&state).await {
             Ok(data) => data,
@@ -506,7 +506,7 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
                 if matches!(err, AnisetteError::AnisetteNotProvisioned) {
                     state.adi_pb = None;
                     client.provision(state).await?;
-                    plist::to_file_xml(config_path, state)?;
+                    plume_secrets::write(&config_path, &plist_to_buf(state)?)?;
                     client.get_headers(&state).await?
                 } else {
                     return Err(err);

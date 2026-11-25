@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tempfile = "3"
 idevice.workspace = true
 tokio.workspace = true
 thiserror.workspace = true

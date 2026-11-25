@@ -200,7 +200,7 @@ impl RefreshDaemon {
                 get_data_path(),
                 None,
                 team_id,
-                false,
+                None,
             )
             .await
             .map_err(|e| format!("Failed to create identity: {}", e))?;
@@ -279,7 +279,7 @@ impl RefreshDaemon {
             get_data_path(),
             None,
             &team_id_string,
-            false,
+            None,
         )
         .await
         .map_err(|e| format!("Failed to create signing identity: {}", e))?;

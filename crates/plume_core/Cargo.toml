@@ -8,6 +8,7 @@ license = "MPL-2.0"
 repository.workspace = true
 
 [dependencies]
+plume_secrets = { path = "../plume_secrets" }
 tokio.workspace = true
 plist.workspace = true
 uuid.workspace = true

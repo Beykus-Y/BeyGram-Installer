@@ -58,7 +58,7 @@ impl CertificateIdentity {
         config_path: PathBuf,
         machine_name: Option<String>,
         team_id: &String,
-        is_export: bool,
+        export_password: Option<&str>,
     ) -> Result<Self, Error> {
         let machine_name = machine_name.unwrap_or_else(|| MACHINE_NAME.to_string());
 
@@ -73,75 +73,51 @@ impl CertificateIdentity {
             new: false,
         };
 
-        // To same some unnecessary requests, we're going to list our certificates first here
-        // then pass them into the necessary functions that need it, if the functions absolutely
-        // need to request certificates (after submitting a CSR, for example), they can do so
-        let certs = session.qh_list_certs(&team_id).await?.certificates;
+        let existing_key = plume_secrets::read_or_migrate(&key_path, |bytes| {
+            let pem = std::str::from_utf8(bytes).map_err(|_| Error::Parse)?;
+            Ok::<_, Error>(RsaPrivateKey::from_pkcs8_pem(pem)?)
+        })?;
+        if existing_key.is_none() {
+            plume_secrets::prepare(&key_path)?;
+        }
 
-        // Only the key will be written to disk, certificate can just be gotten via the request
-        // request we've made, by trying to match our public key with the requests public key
-        let key_pair: [Vec<u8>; 2] = if key_path.exists() {
-            let key_string = fs::read_to_string(&key_path)?;
-            let priv_key = RsaPrivateKey::from_pkcs8_pem(&key_string)?;
-
-            if let Some(certificate) = identity
-                .find_certificate(certs.clone(), &priv_key, &machine_name)
+        let certs = session.qh_list_certs(team_id).await?.certificates;
+        let existing_identity = match existing_key {
+            Some(key) => identity
+                .find_certificate(certs, &key, &machine_name)
                 .await?
-            {
-                let cert_pem = encode_string(
-                    "CERTIFICATE",
-                    LineEnding::LF,
-                    certificate
-                        .cert_content
-                        .ok_or(Error::CertificatePemMissing)?
-                        .as_ref(),
-                )
-                .unwrap();
-                let key_pem = priv_key.to_pkcs8_pem(Default::default())?.to_string();
-
-                [cert_pem.into_bytes(), key_pem.into_bytes()]
-            } else {
-                let (certificate, priv_key) = identity
-                    .request_new_certificate(session, team_id, &machine_name)
-                    .await?;
-
-                let cert_pem = encode_string(
-                    "CERTIFICATE",
-                    LineEnding::LF,
-                    certificate
-                        .cert_content
-                        .ok_or(Error::CertificatePemMissing)?
-                        .as_ref(),
-                )
-                .unwrap();
-                let key_pem = priv_key.to_pkcs8_pem(Default::default())?.to_string();
-
-                fs::write(&key_path, &key_pem)?;
-                identity.new = true;
-                [cert_pem.into_bytes(), key_pem.into_bytes()]
-            }
-        } else {
-            let (cert, priv_key) = identity
-                .request_new_certificate(session, team_id, &machine_name)
-                .await?;
-            let cert_pem = encode_string(
-                "CERTIFICATE",
-                LineEnding::LF,
-                cert.cert_content
-                    .ok_or(Error::CertificatePemMissing)?
-                    .as_ref(),
-            )
-            .unwrap();
-            let key_pem = priv_key.to_pkcs8_pem(Default::default())?.to_string();
-
-            fs::write(&key_path, &key_pem)?;
-            identity.new = true;
-            [cert_pem.into_bytes(), key_pem.into_bytes()]
+                .map(|cert| (cert, key)),
+            None => None,
         };
+        let (certificate, private_key) = if let Some(existing) = existing_identity {
+            existing
+        } else {
+            identity.new = true;
+            identity
+                .request_new_certificate(session, team_id, &machine_name)
+                .await?
+        };
+        let cert_pem = encode_string(
+            "CERTIFICATE",
+            LineEnding::LF,
+            certificate
+                .cert_content
+                .ok_or(Error::CertificatePemMissing)?
+                .as_ref(),
+        )
+        .unwrap();
+        let key_pem = private_key.to_pkcs8_pem(Default::default())?;
+        if identity.new {
+            plume_secrets::write(&key_path, key_pem.as_bytes())?;
+        }
+        let key_pair = [cert_pem.into_bytes(), key_pem.as_bytes().to_vec()];
 
         // TODO: this may be horrendious
-        if let Some(p12_data) = identity.create_pkcs12(&key_pair, is_export) {
-            identity.p12_data = Some(p12_data);
+        if let Some(password) = export_password {
+            identity.p12_data =
+                Some(Self::create_pkcs12(&key_pair, password).ok_or_else(|| {
+                    Error::Certificate("Unable to create certificate export".into())
+                })?);
         }
 
         for pem in key_pair {
@@ -153,6 +129,9 @@ impl CertificateIdentity {
 
     // <config_path>/keys/<team_id>
     fn key_dir(path: PathBuf, team_id: &String) -> Result<PathBuf, Error> {
+        if team_id.is_empty() || !team_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            return Err(Error::Certificate("Invalid Apple team identifier".into()));
+        }
         let dir = path.join("keys").join(team_id);
 
         fs::create_dir_all(&dir)?;
@@ -173,7 +152,10 @@ impl CertificateIdentity {
     // just another unnecessary dependency, but the p12 crate that applecodesign-rs
     // uses has no support for modern encryption, hopefully this doesn't add that
     // much more bloat
-    pub fn create_pkcs12(&self, data: &[Vec<u8>; 2], is_export: bool) -> Option<Vec<u8>> {
+    fn create_pkcs12(data: &[Vec<u8>; 2], password: &str) -> Option<Vec<u8>> {
+        if password.is_empty() {
+            return None;
+        }
         let cert_der = pem::parse(&data[0]).ok()?.contents().to_vec();
         let key_der = pem::parse(&data[1]).ok()?.contents().to_vec();
 
@@ -195,16 +177,7 @@ impl CertificateIdentity {
             p12_keystore::KeyStoreEntry::PrivateKeyChain(key_chain),
         );
 
-        // when exporting the user has no idea what the password is, just dont set one
-        // otherwise, when not exporting (used for SideStore/AltStore) we use the
-        // machine_id since it needs it to locate a matching certificate
-        let password = if is_export {
-            "".to_string()
-        } else {
-            self.machine_id.as_deref().unwrap_or("").to_string()
-        };
-
-        let writer = keystore.writer(&password);
+        let writer = keystore.writer(password);
         writer.write().ok()
     }
 

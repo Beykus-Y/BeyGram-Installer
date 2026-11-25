@@ -314,7 +314,7 @@ pub(crate) async fn run_installation(
                 crate::defaults::get_data_path(),
                 None,
                 team_id,
-                false,
+                None,
             )
             .await
             .map_err(|e| e.to_string())?;
@@ -399,20 +399,6 @@ pub(crate) async fn run_installation(
                     })
                     .await
                     .map_err(|e| format!("Install error: {}", e))?;
-
-                    if options.app.supports_pairing_file() {
-                        if let (Some(custom_identifier), Some(pairing_file_bundle_path)) = (
-                            options.custom_identifier.as_ref(),
-                            options.app.pairing_file_path(),
-                        ) {
-                            let _ = dev
-                                .install_pairing_record(
-                                    custom_identifier,
-                                    &pairing_file_bundle_path,
-                                )
-                                .await;
-                        }
-                    }
                 } else {
                     send("Installing...".to_string(), 90);
 
@@ -569,12 +555,13 @@ pub(crate) async fn export_certificate(account: plume_store::GsaAccount) -> Resu
         team_id
     };
 
+    let export_password = uuid::Uuid::new_v4().simple().to_string();
     let identity = CertificateIdentity::new_with_session(
         &session,
         crate::defaults::get_data_path(),
         None,
         team_id,
-        true,
+        Some(&export_password),
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -583,27 +570,28 @@ pub(crate) async fn export_certificate(account: plume_store::GsaAccount) -> Resu
         return Err("Missing p12 data".to_string());
     };
 
-    let archive_path =
-        crate::defaults::get_data_path().join(format!("{}_certificate.p12", team_id));
-    tokio::fs::write(&archive_path, p12_data)
-        .await
-        .map_err(|e| e.to_string())?;
-
     let file = rfd::AsyncFileDialog::new()
         .set_title("Save Certificate As")
-        .set_file_name(
-            archive_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("certificate.p12"),
-        )
+        .set_file_name(format!("{team_id}_certificate.p12"))
         .save_file()
         .await;
 
     if let Some(save_path) = file {
-        tokio::fs::copy(&archive_path, &save_path.path())
-            .await
-            .map_err(|e| e.to_string())?;
+        // Keep the password out of logs and out of the export directory.
+        rfd::AsyncMessageDialog::new()
+            .set_title("Certificate export password")
+            .set_description(format!(
+                "Save this password separately. It is required to import the certificate.
+
+{export_password}"
+            ))
+            .show()
+            .await;
+        let path = save_path.path();
+        let directory = path.parent().ok_or("Invalid certificate export path")?;
+        let mut output = tempfile::NamedTempFile::new_in(directory).map_err(|e| e.to_string())?;
+        std::io::Write::write_all(&mut output, &p12_data).map_err(|e| e.to_string())?;
+        output.persist(path).map_err(|e| e.error.to_string())?;
     }
 
     Ok(())

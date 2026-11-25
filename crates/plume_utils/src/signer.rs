@@ -2,7 +2,6 @@
 use futures::future::try_join_all;
 use plist::Value;
 use std::sync::Arc;
-use tokio::fs;
 
 use plume_core::{
     CertificateIdentity, MobileProvision, SettingsScope, SigningSettings, UnifiedSigner,
@@ -82,52 +81,6 @@ impl Signer {
             if let Some(orig_identifier) = identifier {
                 for embedded_bundle in &bundles {
                     embedded_bundle.set_matching_identifier(&orig_identifier, new_identifier)?;
-                }
-            }
-        }
-
-        if self.options.app == SignerApp::SideStore
-            || self.options.app == SignerApp::AltStore
-            || self.options.app == SignerApp::LiveContainerAndSideStore
-        {
-            if let Some(cert_identity) = &self.certificate {
-                if let (Some(p12_data), Some(serial_number)) =
-                    (&cert_identity.p12_data, &cert_identity.serial_number)
-                {
-                    let bundles = bundle
-                        .collect_bundles_sorted()?
-                        .into_iter()
-                        .collect::<Vec<_>>();
-
-                    let id_key = match self.options.app {
-                        SignerApp::StikStore => "MachineID",
-                        _ => "ALTCertificateID",
-                    };
-                    let cert_file_name = match self.options.app {
-                        SignerApp::StikStore => "Certificate.p12",
-                        _ => "ALTCertificate.p12",
-                    };
-
-                    match self.options.app {
-                        SignerApp::LiveContainerAndSideStore => {
-                            if let Some(embedded_bundle) = bundles
-                                .iter()
-                                .find(|b| b.bundle_dir().ends_with("SideStoreApp.framework"))
-                            {
-                                embedded_bundle.set_info_plist_key(id_key, &**serial_number)?;
-                                fs::write(
-                                    embedded_bundle.bundle_dir().join(cert_file_name),
-                                    p12_data,
-                                )
-                                .await?;
-                            }
-                        }
-                        SignerApp::SideStore | SignerApp::AltStore => {
-                            bundle.set_info_plist_key(id_key, &**serial_number)?;
-                            fs::write(bundle.bundle_dir().join(cert_file_name), p12_data).await?;
-                        }
-                        _ => {}
-                    }
                 }
             }
         }
