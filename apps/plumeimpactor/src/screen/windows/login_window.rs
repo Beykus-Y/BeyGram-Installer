@@ -206,6 +206,7 @@ impl LoginWindow {
 
         let mut content = column![
             text(t!("login_only_set_to_fruit")).size(14),
+            text(t!("login_anisette_provider")).size(14),
             text(t!("login_email")).size(14),
             email_input,
             text(t!("login_password")).size(14),

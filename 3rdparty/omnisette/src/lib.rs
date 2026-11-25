@@ -169,7 +169,7 @@ impl AnisetteHeaders {
         if let Some(url) = configuration.anisette_url_v3 {
             let url = remote_anisette_v3::provider_url(&url)?;
             log::info!(
-                "Using remote Anisette at {}",
+                "Using remote Anisette at {}. The provider receives the provisioning identifier, Apple provisioning messages, ADI data and client IP.",
                 url.origin().ascii_serialization()
             );
             return Ok(AnisetteHeadersProviderRes::remote(Box::new(
@@ -181,7 +181,9 @@ impl AnisetteHeaders {
             )));
         }
 
-        log::info!("Using local StoreServicesCore Anisette");
+        log::info!(
+            "Using local StoreServicesCore Anisette. Provisioning identifiers and messages go to Apple."
+        );
         Self::get_ssc_anisette_headers_provider(configuration)
     }
 

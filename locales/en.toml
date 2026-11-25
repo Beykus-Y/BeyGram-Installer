@@ -67,6 +67,7 @@ progress_finished = "Finished!"
 progress_failed = "Installation Failed"
 
 login_only_set_to_fruit = "Your Apple ID is used to sign and install apps. Credentials sent only to Apple."
+login_anisette_provider = "Anisette runs locally through StoreServicesCore. Provisioning identifiers and messages go to Apple."
 login_email = "Email:"
 login_password = "Password:"
 login_loading = "Logging in..."
