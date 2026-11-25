@@ -2,11 +2,11 @@
 
 Use the pinned Foundation CI toolchain, Rust 1.100.0 with rustfmt and Clippy. CI sets `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0` to reduce build storage. The upstream [contribution guide](../.github/CONTRIBUTING.md) describes CMake and C++ requirements. The release workflow is authoritative for packaging.
 
-- Ubuntu/Debian: install a C/C++ toolchain, CMake, pkg-config and the GTK/tray and graphics development packages. On Ubuntu 24.04, use the list in [Foundation CI](../.github/workflows/foundation.yml). On Debian 13 substitute `libayatana-appindicator3-dev` for `libappindicator3-dev`. On Fedora use the upstream development packages and the distro equivalents for secret storage and tray dependencies.
-- Windows: install Visual Studio 2022 Build Tools with C++ and the Windows SDK. The native Foundation CI runner uses MSVC. Upstream x86/x64 packaging cross-compiles GNU targets from Linux using MinGW and NASM, while upstream ARM64 builds natively with MSVC. `package/windows/installer.nsi` feeds NSIS.
-- macOS: install Xcode or its Command Line Tools. `.cargo/config.toml` contains the Darwin linker flags for both architectures. A native Foundation CI compile leaves universal assembly, codesigning and notarization to the upstream release workflow.
+- On Ubuntu/Debian, install a C/C++ toolchain, CMake, pkg-config and the GTK/tray and graphics development packages. On Ubuntu 24.04, use the list in [Foundation CI](../.github/workflows/foundation.yml). On Debian 13 substitute `libayatana-appindicator3-dev` for `libappindicator3-dev`. On Fedora use the upstream development packages and the distro equivalents for secret storage and tray dependencies.
+- On Windows, install Visual Studio 2022 Build Tools with C++ and the Windows SDK. The native Foundation CI runner uses MSVC. Upstream x86/x64 packaging cross-compiles GNU targets from Linux using MinGW and NASM, while upstream ARM64 builds natively with MSVC. `package/windows/installer.nsi` feeds NSIS.
+- On macOS, install Xcode or its Command Line Tools. `.cargo/config.toml` contains the Darwin linker flags for both architectures. A native Foundation CI compile leaves universal assembly, codesigning and notarization to the upstream release workflow.
 
-Run these independently from the repository root:
+Run these commands independently from the repository root.
 
 ```sh
 rustup toolchain install 1.100.0 --profile minimal --component rustfmt,clippy
@@ -25,11 +25,12 @@ Upstream developer entry points are `cargo run --bin plumeimpactor` and `cargo r
 
 ## Verification record
 
-- Local Debian 13 x86_64 with Rust 1.100.0. Locked workspace and full dependency metadata succeeded. `cargo fmt --all -- --check` exited 1 with diffs in 13 upstream source files. Source formatting is preserved for baseline comparison.
+- Local Debian 13 x86_64 with Rust 1.100.0. Locked workspace and full dependency metadata succeeded. `cargo fmt --all -- --check` exited 1 with diffs in 13 upstream source files. Source formatting is preserved for baseline comparison. A focused rustfmt check passed for the modified MobileGestalt crate files.
 - RustSec lockfile scan completed with findings. See [Security](SECURITY.md).
 - The original [v2.7.3 upstream release run](https://github.com/claration/impactor/actions/runs/43990731025) succeeded. It covered both Linux architectures, two GNU Windows cross targets, native ARM64 Windows, NSIS, macOS slices and a universal DMG. That is upstream build and packaging evidence.
 - The [first Foundation PR check](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs/45551693517) built both binaries on all three runners. Windows and Linux workspace tests and Clippy could not compile `plume_gestalt` because its build script unconditionally linked CoreFoundation. Commit [04f9eb8](https://github.com/Beykus-Y/BeyGram-Installer/commit/04f9eb84736e52c6cb5e7c5aa6da762cbc550751) scopes the framework and the bindings to macOS. Linux `cargo test --locked --offline -p plume_gestalt` completed successfully, with zero unit cases in that crate.
-- Local Debian host package installation requires permissions unavailable in this session. The first full Linux container could not start due to disk limits. A smaller Debian container later hit the same limit during compilation. A retry with fewer native packages is running.
+- Local Debian 13 x86_64 container build passed in 7m 01s with the locked workspace and Rust 1.100.0. `plumesign --help` exited successfully. The initial container attempts ran out of disk. The successful retry used `debian:trixie-slim` and installed ca-certificates, gcc, g++, make, CMake, pkg-config, GTK 3 and Ayatana AppIndicator development packages. It set `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_INCREMENTAL=0` and `CARGO_BUILD_JOBS=4`.
+- Inside that container, `cargo test --locked --workspace --no-fail-fast` compiled and ran the workspace. The two `omnisette` tests failed. The local provider returned `MissingLibraries`, and the remote test returned a plist parse error (`ExpectedEndOfEventStream`). The other workspace unit and doc-test targets reported zero cases. Local `cargo clippy --locked --workspace --all-targets` exited 0 with warnings.
 - No Windows or macOS developer machine, iPhone, Apple credentials or live signing acceptance session was used. The `omnisette` workspace tests exercise live Anisette providers. The vendored `apple-codesign` test suite exists outside the listed workspace members and runs separately from `cargo test --workspace`.
 
 
