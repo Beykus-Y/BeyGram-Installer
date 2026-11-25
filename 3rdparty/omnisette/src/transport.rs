@@ -10,7 +10,9 @@ pub(crate) const APPLE_LOOKUP_URL: &str = "https://gsa.apple.com/grandslam/GsSer
 pub(crate) fn initialize_tls() {
     // The workspace can enable both AWS-LC and ring through feature unification.
     // Respect an embedding application's provider if it has already installed one.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
 }
 
 pub(crate) fn parse_dictionary(body: &[u8]) -> Result<Dictionary, ProvisioningError> {

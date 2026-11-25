@@ -571,7 +571,9 @@ mod tests {
     #[tokio::test]
     async fn untrusted_certificate_is_rejected_by_https_and_websocket() {
         let (address, _, server) = serve_tls(None);
-        let error = make_reqwest()
+        let error = http_builder()
+            .no_proxy()
+            .build()
             .unwrap()
             .get(format!("https://{address}"))
             .send()

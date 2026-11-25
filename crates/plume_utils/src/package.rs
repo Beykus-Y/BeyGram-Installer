@@ -3,7 +3,7 @@ use crate::{Error, SignerApp, SignerOptions, cgbi};
 use plist::Dictionary;
 use std::path::{Component, PathBuf};
 use std::{fs, io::Read};
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 use zip::{ZipArchive, read::ZipFile};
 
 #[derive(Debug, Clone)]
@@ -191,13 +191,14 @@ impl Package {
             .suffix(".ipa")
             .tempfile_in(&self.stage_dir)?;
         let mut zip = zip::ZipWriter::new(file);
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         fn add_dir_to_zip(
             zip: &mut zip::ZipWriter<tempfile::NamedTempFile>,
             path: &std::path::Path,
             prefix: &std::path::Path,
-            options: &FileOptions<'_, zip::write::ExtendedFileOptions>,
+            options: SimpleFileOptions,
         ) -> Result<(), Error> {
             for entry in fs::read_dir(path)? {
                 let entry = entry?;
@@ -209,18 +210,18 @@ impl Package {
                     .replace('\\', "/");
 
                 if entry_path.is_file() {
-                    zip.start_file(&name, options.clone())?;
+                    zip.start_file(&name, options)?;
                     let mut f = fs::File::open(&entry_path)?;
                     std::io::copy(&mut f, zip)?;
                 } else if entry_path.is_dir() {
-                    zip.add_directory(&name, options.clone())?;
+                    zip.add_directory(&name, options)?;
                     add_dir_to_zip(zip, &entry_path, prefix, options)?;
                 }
             }
             Ok(())
         }
 
-        add_dir_to_zip(&mut zip, payload_dir, prefix, &options)?;
+        add_dir_to_zip(&mut zip, payload_dir, prefix, options)?;
         let (_, zip_file_path) = zip.finish()?.keep().map_err(|err| err.error)?;
         Ok(zip_file_path)
     }
@@ -315,6 +316,41 @@ fn read_entry(entry: impl Read, limit: u64) -> Result<Vec<u8>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standard_ipa_can_be_extracted_again_and_repackaged() {
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("fixture.ipa");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        zip.start_file(
+            "Payload/Test.app/Info.plist",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        let fixture = Dictionary::from_iter([("CFBundleIdentifier", "test.beygram.fixture")]);
+        let mut plist = Vec::new();
+        plist::to_writer_xml(&mut plist, &fixture).unwrap();
+        zip.write_all(&plist).unwrap();
+        zip.finish().unwrap();
+
+        let package = Package::new(path).unwrap();
+        let first = package.get_package_bundle().unwrap();
+        let second = package.get_package_bundle().unwrap();
+        assert_ne!(first.bundle_dir(), second.bundle_dir());
+        let rebuilt = package
+            .get_archive_based_on_path(second.bundle_dir())
+            .unwrap();
+        let mut zip = ZipArchive::new(fs::File::open(rebuilt).unwrap()).unwrap();
+        let mut recovered = Vec::new();
+        zip.by_name("Payload/Test.app/Info.plist")
+            .unwrap()
+            .read_to_end(&mut recovered)
+            .unwrap();
+        assert_eq!(recovered, plist);
+        package.remove_package_stage();
+    }
 
     #[test]
     fn metadata_size_limit_applies_to_actual_decoded_bytes() {

@@ -99,6 +99,9 @@ impl StoreServicesCoreADIProxy<'_> {
             let native_library_path = library_path.join("lib").join(ARCH);
 
             let path = native_library_path.join("libstoreservicescore.so");
+            if !path.is_file() {
+                return Err(AnisetteError::MissingLibraries);
+            }
             let path = path.to_str().ok_or(AnisetteError::Misc)?;
             let store_services_core = AndroidLibrary::load(path)?;
 
