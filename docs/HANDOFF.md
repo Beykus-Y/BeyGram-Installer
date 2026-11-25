@@ -1,5 +1,17 @@
 # MVP 0 handoff
 
-The import is published on DEV. Foundation work continues on `feature/mvp0-foundation` for Issue #1. Use `git log -1 origin/feature/mvp0-foundation` for the last published checkpoint. DEV combines both original histories with a two-parent merge. The upstream baseline is v2.7.3 at `2ba32ea43246bd4db0265eb3120d3c72e39f5b22`, also observed as upstream main.
+Development base is `DEV`, with original histories joined at `bc0320389fe6d540b28a291c757c91c39d3ecffe`. Upstream v2.7.3 is `2ba32ea43246bd4db0265eb3120d3c72e39f5b22`. Audit work is published on `feature/mvp0-foundation` in [Draft PR #10](https://github.com/Beykus-Y/BeyGram-Installer/pull/10) for [Issue #1](https://github.com/Beykus-Y/BeyGram-Installer/issues/1).
 
-The imported project and original BeyGram roadmap are present. The source audit, release workflow isolation, documentation and build verification are pending. No build has run at this checkpoint. Reproduce the ancestry checks with `git merge-base --is-ancestor 2ba32ea43246bd4db0265eb3120d3c72e39f5b22 origin/DEV` and the same command with `origin/main` as the first revision. Next read the workspace manifests, Makefile and upstream workflows.
+```sh
+git fetch origin
+git log -1 --format='%H %s' origin/feature/mvp0-foundation
+git merge-base --is-ancestor 2ba32ea43246bd4db0265eb3120d3c72e39f5b22 origin/DEV
+git merge-base --is-ancestor 7d44044be60ddc5fa758709d37d81ced8dc7499c origin/DEV
+gh pr checks 10 --repo Beykus-Y/BeyGram-Installer
+```
+
+The remote branch head identifies the latest saved commit, including updates to this file. The verified import, source audit, security and licensing findings and Issue #2 recommendations are in [MVP0_REPORT.md](MVP0_REPORT.md) and its linked documents. The project keeps the upstream signing engine and architecture. Future syncs merge reviewed upstream commits into DEV. Foundation CI checks workspace binaries and tests without publishing artifacts.
+
+Locked metadata resolved. Rustfmt reproduced upstream formatting diffs locally and in CI. RustSec found advisories. See [BUILD.md](BUILD.md) for the exact commands, tool versions and run links. No physical device testing has happened.
+
+Next retrieve the completed Foundation job outcomes and local container results, update BUILD and this file, and post the Russian status to Issue #1 and PR #10. Keep the PR in draft while baseline failures are outstanding. Issue #2 requires two real IPA artifacts and a separate authorized device/team test.

@@ -16,3 +16,10 @@ Static review of v2.7.3. Severity P0 means a release-blocking trust failure, P1 
 | P3 | GrandSlam and DeveloperSession use reqwest with HTTPS. The workspace enables system proxies and the Windows core manifest enables native TLS due to the upstream platform-verifier issue. Effective trust stores and proxy behavior have not been exercised on each OS. | Verify certificate rejection and proxy behavior with test endpoints and record the active TLS backend on each OS. |
 
 See [Licensing](LICENSES.md) for redistribution findings and [Build](BUILD.md) for dependency verification.
+
+
+## Dependency advisories
+
+RustSec `cargo-audit 0.23.0` found 49 advisory matches and 36 warnings across the 938 locked packages using advisory database commit `10db6998b5d74ec438bcf0763125bd425a068a8f`. Warnings comprise 12 unmaintained, 18 unsound and 6 yanked entries. Counts are lockfile-level matches, so they include platform-specific and build-only dependencies. Triage applicable features and call sites before assigning production severity.
+
+P1 review item: `Package::get_package_bundle` calls `zip 8.6.0`'s `ZipArchive::extract` on the caller-provided IPA. Review the extraction advisories and adopt a fixed version or a narrowly scoped mitigation before handling untrusted IPA or enabling automatic updates. Review network-facing TLS and HTTP dependencies next. The lockfile is preserved at the upstream baseline for this audit.

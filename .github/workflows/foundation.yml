@@ -3,8 +3,6 @@ name: Foundation checks
 on:
   pull_request:
     branches: [DEV]
-  push:
-    branches: [feature/mvp0-foundation]
 
 permissions:
   contents: read
