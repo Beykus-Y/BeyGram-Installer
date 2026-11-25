@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+tempfile = "3"
 plume_secrets = { path = "../plume_secrets" }
 idevice.workspace = true
 thiserror.workspace = true

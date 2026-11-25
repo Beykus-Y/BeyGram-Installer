@@ -39,6 +39,10 @@ pub enum Error {
     #[error("Unsupported file type: {0}")]
     UnsupportedFileType(String),
 
+    #[error("IPA archive contains an unsupported path or file type")]
+    UnsafePackageEntry,
+    #[error("IPA metadata exceeds the size limit")]
+    PackageMetadataTooLarge,
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
     #[error("Info.plist not found")]
