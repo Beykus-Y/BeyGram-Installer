@@ -4,7 +4,7 @@ use std::{collections::HashMap, io::Cursor, path::PathBuf};
 
 use crate::adi_proxy::{LOOKUP_CLIENT_INFO, ProvisioningError};
 use crate::transport::{
-    APPLE_LOOKUP_URL, dictionary_at, https_url, initialize_tls, parse_dictionary, provisioning_url,
+    APPLE_LOOKUP_URL, dictionary_at, http_builder, https_url, parse_dictionary, provisioning_url,
     string_at,
 };
 use async_trait::async_trait;
@@ -14,7 +14,7 @@ use chrono::{DateTime, SubsecRound, Utc};
 use futures_util::{SinkExt, stream::StreamExt};
 use log::debug;
 use plist::{Data, Dictionary};
-use reqwest::{Client, ClientBuilder, RequestBuilder, Response, Url};
+use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
@@ -175,14 +175,6 @@ impl AnisetteData {
             .into_iter(),
         )
     }
-}
-
-fn http_builder() -> ClientBuilder {
-    initialize_tls();
-    ClientBuilder::new()
-        .http1_title_case_headers()
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
 }
 
 fn make_reqwest() -> Result<Client, AnisetteError> {

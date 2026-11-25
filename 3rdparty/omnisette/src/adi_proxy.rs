@@ -2,7 +2,7 @@ use crate::AnisetteError;
 use crate::adi_proxy::ProvisioningError::InvalidResponse;
 use crate::anisette_headers_provider::AnisetteHeadersProvider;
 use crate::transport::{
-    APPLE_LOOKUP_URL, dictionary_at, initialize_tls, parse_dictionary, provisioning_url, string_at,
+    APPLE_LOOKUP_URL, dictionary_at, http_builder, parse_dictionary, provisioning_url, string_at,
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as base64_engine;
@@ -10,10 +10,10 @@ use log::debug;
 use plist::{Dictionary, Value};
 use rand::RngCore;
 #[cfg(not(feature = "async"))]
-use reqwest::blocking::{Client, ClientBuilder, Response};
+use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, HeaderValue, InvalidHeaderValue};
 #[cfg(feature = "async")]
-use reqwest::{Client, ClientBuilder, Response};
+use reqwest::{Client, Response};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -175,12 +175,7 @@ impl dyn ADIProxy {
             HeaderValue::from_str(self.get_serial_number().as_str())?,
         );
 
-        initialize_tls();
-
-        let http_client = ClientBuilder::new()
-            .http1_title_case_headers()
-            .https_only(true)
-            .redirect(reqwest::redirect::Policy::none())
+        let http_client = http_builder()
             .user_agent(AKD_USER_AGENT)
             .default_headers(headers)
             .build()?;

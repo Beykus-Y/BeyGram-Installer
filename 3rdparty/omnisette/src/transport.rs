@@ -1,5 +1,9 @@
 use plist::{Dictionary, Value};
+#[cfg(feature = "async")]
+use reqwest::ClientBuilder;
 use reqwest::Url;
+#[cfg(not(feature = "async"))]
+use reqwest::blocking::ClientBuilder;
 use std::io::Cursor;
 
 use crate::adi_proxy::ProvisioningError;
@@ -7,12 +11,16 @@ use crate::adi_proxy::ProvisioningError::InvalidResponse;
 
 pub(crate) const APPLE_LOOKUP_URL: &str = "https://gsa.apple.com/grandslam/GsService2/lookup";
 
-pub(crate) fn initialize_tls() {
+pub(crate) fn http_builder() -> ClientBuilder {
     // The workspace can enable both AWS-LC and ring through feature unification.
     // Respect an embedding application's provider if it has already installed one.
     if rustls::crypto::CryptoProvider::get_default().is_none() {
         let _ = rustls::crypto::ring::default_provider().install_default();
     }
+    ClientBuilder::new()
+        .http1_title_case_headers()
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
 }
 
 pub(crate) fn parse_dictionary(body: &[u8]) -> Result<Dictionary, ProvisioningError> {
