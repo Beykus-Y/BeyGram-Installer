@@ -161,7 +161,8 @@ version = "0.2.19"
 
 [dependencies.object]
 version = "0.36.5"
-features = ["write"]
+features = ["read", "write"]
+default-features = false
 
 [dependencies.oid-registry]
 version = "0.7.1"

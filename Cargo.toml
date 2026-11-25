@@ -40,7 +40,7 @@ idevice = { git = "https://github.com/jkcoxson/idevice", rev = "5171e34e3a236842
     "full",
     "ring",
 ] }
-plist = "1.8"
+plist = "1.10.4"
 goblin = "0.9"
 # Errors
 env_logger = "0.11"
