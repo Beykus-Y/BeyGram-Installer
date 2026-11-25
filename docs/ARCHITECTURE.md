@@ -1,0 +1,22 @@
+# Impactor architecture
+
+## Workspace
+
+The root [Cargo.toml](../Cargo.toml) uses Rust 2024 and resolver 3. The default member is `apps/plumeimpactor`. The other binary, `apps/plumesign`, uses Clap and dispatches account, device, Mach-O and signing commands from `src/main.rs` and `src/commands/`. Workspace crates are `plume_core` (Apple authentication, developer services and binary/profile helpers), `plume_utils` (IPA, signing orchestration and device services), `plume_store` (account and refresh state), `plume_gestalt` (Apple Silicon Mac UDID), `decompress` and `omnisette`. The root manifest patches `apple-codesign` to the vendored 0.29.0 source. See [Signing](SIGNING.md) for the call chain.
+
+## GUI, discovery and transports
+
+- `apps/plumeimpactor/src/main.rs` wires `iced::daemon` to `screen::Impactor::{new,update,view,subscription}`. `screen/mod.rs` holds GUI state and handles `Message` events. Screens, login window, styles and translations live under `src/screen/`, `src/appearance/` and `locales/`. Linux initializes GTK for the tray and uses `check_gpu` to select a tiny-skia fallback when required.
+- `subscriptions.rs::device_listener` enumerates `UsbmuxdConnection::get_devices` and streams `UsbmuxdListenEvent::{Connected,Disconnected}` into Iced. A failed initial connection or a closed stream ends that listener. It has no independent retry loop. `screen/mod.rs` maintains the device list and shares connected devices with the refresh thread by UDID. Connection events identify usbmux device handles, so USB-to-network transitions and simultaneous entries need testing. Apple Silicon also exposes “This Mac” via `plume_gestalt::get_udid`.
+- `crates/plume_utils/src/device.rs::Device` wraps a pinned `idevice` `UsbmuxdDevice`. It uses `LockdownClient` for device information, the usbmux provider for service connections, `InstallationProxyClient` for app enumeration, `idevice::utils::installation` for installation and `MisagentClient` for profile installation. `Connection::Network` is recognized and displayed as WiFi. Upstream consumes network devices exposed by usbmux, with no separate Windows discovery, wireless onboarding or recovery layer found in this path.
+- `Device::pair` calls Lockdown and `save_pair_record` on usbmuxd. Separate installer integration methods `install_pairing_record` and `install_remote_pairing_record` transfer pairing material into supported third-party app containers through House Arrest/AFC. The latter uses `CoreDeviceProxy`, RSD, RemoteXPC and `RpPairingFile`. This integration has a different purpose from desktop Wi-Fi discovery.
+
+## Background operation and updater
+
+- `main.rs::main` starts `spawn_refresh_daemon` and then runs Iced. `refresh.rs::RefreshDaemon` is a thread with a Tokio runtime in the desktop process. It reloads `accounts.json` every three minutes and checks due `RefreshApp` entries against its connected-device map. It tracks active UDIDs per daemon instance. The manual UI path constructs a fresh `RefreshDaemon::new`, so its lock is separate. `AccountStore::save_sync` writes a full JSON snapshot and can overwrite concurrent changes. Neither mechanism gives a common per-device lock across all GUI and background operations.
+- `screen/mod.rs` handles window closure and tray events. `tray.rs` builds a `tray-icon` menu and `subscriptions.rs::tray_subscription` maps tray actions into GUI messages. `startup.rs::build_auto_launcher` uses `auto-launcher` with `--tray`, Windows CurrentUser, macOS LaunchAgent and Linux XDG autostart. `main.rs` uses `SingleInstance` and `relaunch.rs` signals an existing instance. This is a user-session desktop process which can stay running after window closure.
+- `screen/general.rs` exposes upstream links. The baseline has no desktop self-update feed, updater dependency or download/apply flow in the GUI. Distribution is via upstream releases and packaging. A future BeyGram IPA feed is also outside this baseline.
+
+## Delivery
+
+`.github/workflows/release.yml` builds Linux AppImages, Windows GNU binaries cross-compiled from Ubuntu plus a native Windows ARM64 MSVC build, NSIS installers, and macOS slices combined with `lipo` into a signed, notarized universal DMG. The macOS job uses upstream signing and notarization secrets. The tag job prepares a draft release. `.github/workflows/meta.yml` uploads metainfo on release publication. `Makefile`, `package/`, `flake.nix` and `update_meta.sh` support packaging. The upstream workflow builds artifacts and has no standalone format, Clippy or workspace-test stage.
