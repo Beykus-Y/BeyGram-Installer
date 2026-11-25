@@ -8,10 +8,10 @@ mod windows;
 use std::collections::VecDeque;
 
 use iced::Length::Fill;
-use iced::widget::operation::{focus_next,focus_previous};
-use iced::widget::{button, column, container, pick_list, row, stack, text};
 use iced::event::{self, Event, Status};
 use iced::keyboard::{self, Key, key};
+use iced::widget::operation::{focus_next, focus_previous};
+use iced::widget::{button, column, container, pick_list, row, stack, text};
 use iced::window;
 use iced::{Element, Subscription, Task};
 
@@ -37,7 +37,9 @@ pub enum Message {
     NavigateToScreen(ImpactorScreenType),
     NextScreen,
     PreviousScreen,
-    TabPressed { shift: bool },
+    TabPressed {
+        shift: bool,
+    },
 
     // Device management
     ComboBoxSelected(String),
@@ -831,7 +833,9 @@ impl Impactor {
                     ..
                 }),
                 Status::Ignored,
-            ) => Some(Message::TabPressed { shift: modifiers.shift() }),
+            ) => Some(Message::TabPressed {
+                shift: modifiers.shift(),
+            }),
             _ => None,
         });
 
