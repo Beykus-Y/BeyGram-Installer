@@ -68,3 +68,9 @@ BEYGRAM_LIVE_ANISETTE_URL=https://approved.example \
 ```
 
 The remote check communicates with the selected service and Apple and creates provisioning state. Use it only after approving the provider and its handling of the provisioning identifier, Apple intermediates, ADI blob and client IP. Neither check needs an Apple ID. The former local failure required absent proprietary libraries. The standalone remote harness now declares the Tokio test and Chrono clock features explicitly and installs a Rustls crypto provider before transport setup. A non-success HTTP response is now reported by status. Invalid plist or unexpected structure is reported as an invalid provisioning response. The precise upstream payload behind the historical local plist error was not captured.
+
+The deterministic vault tests use synthetic bytes and an in-memory credential backend. To exercise the native OS vault explicitly with a disposable entry, run the following in a session with an unlocked Keychain, Credential Manager or Secret Service collection. The Linux smoke test passed using an isolated D-Bus session and GNOME Keyring. Linux builds require `libdbus-1-dev` on Debian/Ubuntu or `dbus-devel` on Fedora.
+
+```sh
+cargo +1.100.0 test --locked -p plume_secrets native_vault_round_trip -- --ignored
+```

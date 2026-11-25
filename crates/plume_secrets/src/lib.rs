@@ -346,6 +346,34 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires an unlocked native credential vault"]
+    fn native_vault_round_trip() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("synthetic-vault-smoke");
+        fs::write(&path, b"synthetic credential").unwrap();
+
+        let locked = LockedFile::open(&path, false).unwrap().unwrap();
+        let entry = locked.entry().unwrap();
+        let result = read_locked(
+            &locked,
+            |create| get_key(&entry, create),
+            |bytes| Ok::<_, Error>(bytes == b"synthetic credential"),
+        )
+        .and_then(|_| {
+            read_locked(
+                &locked,
+                |create| get_key(&entry, create),
+                |bytes| Ok::<_, Error>(bytes == b"synthetic credential"),
+            )
+        });
+        let cleanup = entry.delete_credential();
+
+        assert!(matches!(result, Ok(Some((true, _)))), "{:?}", result.err());
+        cleanup.unwrap();
+        assert!(fs::read(&path).unwrap().starts_with(MAGIC));
+    }
+
+    #[test]
     fn unavailable_vault_keeps_legacy_record_for_retry() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("fixture");

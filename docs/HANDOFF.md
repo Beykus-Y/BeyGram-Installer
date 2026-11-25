@@ -1,30 +1,17 @@
-# MVP 0 handoff
+# BeyGram Installer Foundation handoff
 
-Development base is `DEV`, with original histories joined at `bc0320389fe6d540b28a291c757c91c39d3ecffe`. Upstream v2.7.3 is `2ba32ea43246bd4db0265eb3120d3c72e39f5b22`. Audit work is published on `feature/mvp0-foundation` in [Draft PR #10](https://github.com/Beykus-Y/BeyGram-Installer/pull/10) for [Issue #1](https://github.com/Beykus-Y/BeyGram-Installer/issues/1).
+Work is on `feature/mvp0-foundation` in [Draft PR #10](https://github.com/Beykus-Y/BeyGram-Installer/pull/10) for [Issue #1](https://github.com/Beykus-Y/BeyGram-Installer/issues/1). The development base is `DEV`. Its histories join at `bc0320389fe6d540b28a291c757c91c39d3ecffe`. The upstream v2.7.3 commit is `2ba32ea43246bd4db0265eb3120d3c72e39f5b22`. The previous audit is in [MVP0_REPORT.md](MVP0_REPORT.md).
 
-```sh
-git fetch origin
-git switch feature/mvp0-foundation
-git log -1 --format='%H %s' origin/feature/mvp0-foundation
-git merge-base --is-ancestor 2ba32ea43246bd4db0265eb3120d3c72e39f5b22 origin/DEV
-git merge-base --is-ancestor 7d44044be60ddc5fa758709d37d81ced8dc7499c origin/DEV
-gh pr checks 10 --repo Beykus-Y/BeyGram-Installer
-```
+## MVP 0.1 changes
 
-The latest code checkpoint is `04f9eb84736e52c6cb5e7c5aa6da762cbc550751`. The remote branch head identifies the latest saved commit, including updates to this file. The verified import, source audit, security and licensing findings and Issue #2 recommendations are in [MVP0_REPORT.md](MVP0_REPORT.md) and its linked documents. The project keeps the upstream signing engine and architecture. Future syncs merge reviewed upstream commits into DEV. Foundation CI checks workspace binaries and tests without publishing artifacts.
+- Workspace rustfmt baseline is in the isolated `737fd1a` commit. `31ca5e7` removes automatic certificate revocation from GUI, CLI and refresh. Apple quota error 7460 directs the operator to the team owner and Apple's developer portal.
+- `ebc4f5a` verifies HTTPS/WSS, rejects redirects and constrains Apple provisioning URLs to `gsa.apple.com:443`. Application entry points use local StoreServicesCore. Remote Anisette requires an explicit HTTPS provider configuration. The provider data disclosure, deterministic fixtures and separately runnable live cases are in [BUILD.md](BUILD.md).
+- `62bfe42` protects managed account data, signing keys, cached remote pairing records and provider-scoped ADI state with OS-backed encryption. Valid account, key and pairing records migrate in place. `c5258fc` prevents a stale store from overwriting a newer revision, including after logout. Automatic signing-key and pairing-record transfers to recognized apps were removed. Explicit PKCS#12 export uses a generated password.
+- `e296b19` removes wire payloads from application diagnostics, blocks sensitive dependency log targets and switches CLI login to a masked password prompt.
+- `96b7973` and its follow-ups isolate IPA extraction in private directories, restrict archive entry types and bound preflight metadata reads. `8d73121` updates only dependencies relevant to the advisory triage. [RustSec disposition](RUSTSEC_MVP01.md) records all 49 baseline matches and 18 remaining lockfile matches. The [licensing plan](LICENSES.md#binary-distribution-release-gate) lists the outstanding release decisions.
 
-Locked metadata resolved. The native CI rerun built both binaries and completed Clippy on Ubuntu, Windows and macOS. The two live Anisette tests failed on all runners. Rustfmt reproduces upstream differences locally and in CI. The Debian container retry built both binaries and the CLI help command ran. Workspace tests compiled and reported two Anisette errors, and local Clippy completed with warnings. See [BUILD.md](BUILD.md) for exact commands, versions and logs. RustSec found advisories. No physical device testing has happened.
+## Verification and next action
 
-For the remaining CI work, reproduce the two Anisette failures with `cargo test --locked -p omnisette --lib --features remote-anisette-v3`, define a deterministic test fixture, and review the baseline rustfmt diff. Keep the PR in draft while verification is incomplete. Issue #2 requires two real IPA artifacts and a separate device/team test without publishing credentials.
+The [first hardening matrix](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs/45558623948) passed on Linux, Windows and macOS after the Anisette changes. The [credential and logging matrix](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs/45559496918) also passed. Linux focused checks passed for Anisette, migration, authenticated-record rejection and stale-write rejection. The native Linux vault smoke test passed using synthetic data in an isolated GNOME Keyring session.
 
-## MVP 0.1 checkpoints
-
-- `737fd1a` applies the baseline rustfmt diff in a dedicated commit.
-- `31ca5e7` removes the Developer API revocation call and GUI confirmation path. Quota error 7460 requires the team owner to manage certificates in Apple's portal.
-- Anisette uses HTTPS with certificate verification and rejects redirects. Apple provisioning URLs must use `gsa.apple.com:443`. The remote transport uses WSS and explicit provider selection. CLI, GUI and refresh use local StoreServicesCore by default. The focused Anisette suite passed locally on Linux. See [BUILD.md](BUILD.md) for the separate live target.
-
-Next P0 work is protecting account tokens, signing keys and pairing records, then verifying diagnostic logging. P3 advisory applicability and licensing work remain open. Keep PR #10 in draft pending the full native matrix and security criteria.
-
-Managed account records, signing keys, cached remote pairing records and provider-scoped remote Anisette state now use local authenticated encryption. The encryption keys live in Windows Credential Manager, macOS Keychain or Linux Secret Service. Valid older account, key and pairing records are replaced in place after validation and vault access. Signing and installation no longer copy a signing key or pairing record into a recognized third-party app automatically. The explicit certificate export uses a generated password and the explicit device pairing transfer remains available.
-
-Developer and authentication wire payloads are excluded from diagnostics. The app logger blocks sensitive dependency log targets even when verbose logging is requested. CLI login uses a masked password prompt. Apple request and Anisette protocol errors no longer expose raw developer responses or WebSocket bodies.
+Check the current branch head and its PR checks with `gh pr checks 10 --repo Beykus-Y/BeyGram-Installer`. Verify the full workspace matrix after ZIP and dependency changes. The explicitly invoked live Anisette tests and native Windows/macOS vault smoke checks need their respective prerequisites. No real Apple ID, physical device, signed release or published binary was used for MVP 0.1. Retain draft status while verification is incomplete. Issue #2 device and IPA work remain outside this milestone.
