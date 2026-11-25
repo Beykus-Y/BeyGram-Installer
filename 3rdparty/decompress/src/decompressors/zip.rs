@@ -105,7 +105,7 @@ impl Decompressor for Zip {
 
             let outpath = (opts.map)(outpath.as_path());
 
-            if file.name().ends_with('/') {
+            if file.is_dir() {
                 fs::create_dir_all(&outpath)?;
             } else {
                 if let Some(p) = outpath.parent() {

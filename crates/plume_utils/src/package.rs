@@ -27,7 +27,7 @@ impl Package {
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
             validate_entry(&file)?;
-            archive_entries.push(file.name().to_owned());
+            archive_entries.push(file.name()?.into_owned());
         }
 
         let info_plist_dictionary =
@@ -293,7 +293,7 @@ fn validate_entry<R: Read>(entry: &ZipFile<'_, R>) -> Result<(), Error> {
     let valid_path = entry.enclosed_name().is_some_and(|path| {
         path.components()
             .all(|part| matches!(part, Component::Normal(_)))
-    }) && !entry.name().contains(['\\', ':']);
+    }) && !entry.name()?.contains(['\\', ':']);
     let regular = entry
         .unix_mode()
         .is_none_or(|mode| matches!(mode & 0o170000, 0 | 0o100000 | 0o040000));
