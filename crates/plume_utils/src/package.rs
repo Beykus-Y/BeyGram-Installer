@@ -1,17 +1,15 @@
 use super::{Bundle, PlistInfoTrait};
 use crate::{Error, SignerApp, SignerOptions, cgbi};
 use plist::Dictionary;
-use std::path::PathBuf;
-use std::{env, fs, io::Read};
-use uuid::Uuid;
-use zip::ZipArchive;
-use zip::write::FileOptions;
+use std::path::{Component, PathBuf};
+use std::{fs, io::Read};
+use zip::write::SimpleFileOptions;
+use zip::{ZipArchive, read::ZipFile};
 
 #[derive(Debug, Clone)]
 pub struct Package {
     package_file: PathBuf,
     stage_dir: PathBuf,
-    stage_payload_dir: PathBuf,
     info_plist_dictionary: Dictionary,
     archive_entries: Vec<String>,
     pub app_icon_data: Option<Vec<u8>>,
@@ -19,20 +17,18 @@ pub struct Package {
 
 impl Package {
     pub fn new(package_file: PathBuf) -> Result<Self, Error> {
-        let stage_dir = env::temp_dir().join(format!(
-            "plume_stage_{:08}",
-            Uuid::new_v4().to_string().to_uppercase()
-        ));
-        let out_package_file = stage_dir.join("stage.ipa");
-
-        fs::create_dir_all(&stage_dir).ok();
+        let stage = tempfile::Builder::new().prefix("plume_stage_").tempdir()?;
+        let out_package_file = stage.path().join("stage.ipa");
         fs::copy(&package_file, &out_package_file)?;
 
         let file = fs::File::open(&out_package_file)?;
         let mut archive = ZipArchive::new(file)?;
-        let archive_entries = (0..archive.len())
-            .filter_map(|i| archive.by_index(i).ok().map(|f| f.name().to_string()))
-            .collect::<Vec<_>>();
+        let mut archive_entries = Vec::with_capacity(archive.len());
+        for i in 0..archive.len() {
+            let file = archive.by_index(i)?;
+            validate_entry(&file)?;
+            archive_entries.push(file.name()?.into_owned());
+        }
 
         let info_plist_dictionary =
             Self::get_info_plist_from_archive(&out_package_file, &archive_entries)?;
@@ -43,10 +39,10 @@ impl Package {
             &info_plist_dictionary,
         );
 
+        let stage_dir = stage.keep();
         Ok(Self {
             package_file: out_package_file,
             stage_dir: stage_dir.clone(),
-            stage_payload_dir: stage_dir.join("Payload"),
             info_plist_dictionary,
             archive_entries,
             app_icon_data,
@@ -73,9 +69,7 @@ impl Package {
             })
             .ok_or(Error::PackageInfoPlistMissing)?;
 
-        let mut plist_file = archive.by_name(info_plist_path)?;
-        let mut plist_data = Vec::new();
-        plist_file.read_to_end(&mut plist_data)?;
+        let plist_data = read_entry(archive.by_name(info_plist_path)?, 8 * 1024 * 1024)?;
 
         Ok(plist::from_bytes(&plist_data)?)
     }
@@ -150,11 +144,11 @@ impl Package {
         for name in &icon_names {
             for suffix in &suffixes {
                 let candidate = format!("{app_prefix}/{name}{suffix}");
-                if let Ok(mut entry) = archive.by_name(&candidate) {
-                    let mut data = Vec::new();
-                    if entry.read_to_end(&mut data).is_ok() && !data.is_empty() {
-                        return Some(cgbi::normalize(data));
-                    }
+                if let Ok(entry) = archive.by_name(&candidate)
+                    && let Ok(data) = read_entry(entry, 32 * 1024 * 1024)
+                    && !data.is_empty()
+                {
+                    return Some(cgbi::normalize(data));
                 }
             }
         }
@@ -165,38 +159,46 @@ impl Package {
     pub fn get_package_bundle(&self) -> Result<Bundle, Error> {
         let file = fs::File::open(&self.package_file)?;
         let mut archive = ZipArchive::new(file)?;
-        archive.extract(&self.stage_dir)?;
+        let extraction_dir = tempfile::Builder::new()
+            .prefix("unpacked_")
+            .tempdir_in(&self.stage_dir)?;
+        archive.extract(extraction_dir.path())?;
 
-        let app_dir = fs::read_dir(&self.stage_payload_dir)?
+        let app_dir = fs::read_dir(extraction_dir.path().join("Payload"))?
             .filter_map(Result::ok)
             .map(|e| e.path())
             .find(|p| p.is_dir() && p.extension().and_then(|e| e.to_str()) == Some("app"))
             .ok_or_else(|| Error::PackageInfoPlistMissing)?;
 
-        Ok(Bundle::new(app_dir)?)
+        let bundle = Bundle::new(app_dir)?;
+        extraction_dir.keep();
+        Ok(bundle)
     }
 
     pub fn get_archive_based_on_path(&self, path: &PathBuf) -> Result<PathBuf, Error> {
         if path.is_dir() {
-            self.clone().archive_package_bundle()
+            let payload_dir = path.parent().ok_or(Error::PackageInfoPlistMissing)?;
+            self.archive_package_bundle(payload_dir)
         } else {
             Ok(self.package_file.clone())
         }
     }
 
-    fn archive_package_bundle(self) -> Result<PathBuf, Error> {
-        let zip_file_path = self.stage_dir.join("resigned.ipa");
-        let file = fs::File::create(&zip_file_path)?;
+    fn archive_package_bundle(&self, payload_dir: &std::path::Path) -> Result<PathBuf, Error> {
+        let prefix = payload_dir.parent().ok_or(Error::PackageInfoPlistMissing)?;
+        let file = tempfile::Builder::new()
+            .prefix("resigned_")
+            .suffix(".ipa")
+            .tempfile_in(&self.stage_dir)?;
         let mut zip = zip::ZipWriter::new(file);
-        let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-
-        let payload_dir = self.stage_payload_dir;
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
         fn add_dir_to_zip(
-            zip: &mut zip::ZipWriter<fs::File>,
-            path: &PathBuf,
-            prefix: &PathBuf,
-            options: &FileOptions<'_, zip::write::ExtendedFileOptions>,
+            zip: &mut zip::ZipWriter<tempfile::NamedTempFile>,
+            path: &std::path::Path,
+            prefix: &std::path::Path,
+            options: SimpleFileOptions,
         ) -> Result<(), Error> {
             for entry in fs::read_dir(path)? {
                 let entry = entry?;
@@ -208,20 +210,19 @@ impl Package {
                     .replace('\\', "/");
 
                 if entry_path.is_file() {
-                    zip.start_file(&name, options.clone())?;
+                    zip.start_file(&name, options)?;
                     let mut f = fs::File::open(&entry_path)?;
                     std::io::copy(&mut f, zip)?;
                 } else if entry_path.is_dir() {
-                    zip.add_directory(&name, options.clone())?;
+                    zip.add_directory(&name, options)?;
                     add_dir_to_zip(zip, &entry_path, prefix, options)?;
                 }
             }
             Ok(())
         }
 
-        add_dir_to_zip(&mut zip, &payload_dir, &self.stage_dir, &options)?;
-        zip.finish()?;
-
+        add_dir_to_zip(&mut zip, payload_dir, prefix, options)?;
+        let (_, zip_file_path) = zip.finish()?.keep().map_err(|err| err.error)?;
         Ok(zip_file_path)
     }
 
@@ -286,5 +287,77 @@ impl Package {
 
         let new_settings = SignerOptions::new_for_app(app);
         *settings = new_settings;
+    }
+}
+
+fn validate_entry<R: Read>(entry: &ZipFile<'_, R>) -> Result<(), Error> {
+    let valid_path = entry.enclosed_name().is_some_and(|path| {
+        path.components()
+            .all(|part| matches!(part, Component::Normal(_)))
+    }) && !entry.name()?.contains(['\\', ':']);
+    let regular = entry
+        .unix_mode()
+        .is_none_or(|mode| matches!(mode & 0o170000, 0 | 0o100000 | 0o040000));
+    if !valid_path || !regular || entry.is_symlink() {
+        return Err(Error::UnsafePackageEntry);
+    }
+    Ok(())
+}
+
+fn read_entry(entry: impl Read, limit: u64) -> Result<Vec<u8>, Error> {
+    let mut content = Vec::new();
+    entry.take(limit + 1).read_to_end(&mut content)?;
+    if content.len() as u64 > limit {
+        return Err(Error::PackageMetadataTooLarge);
+    }
+    Ok(content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_ipa_can_be_extracted_again_and_repackaged() {
+        use std::io::Write;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("fixture.ipa");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        zip.start_file(
+            "Payload/Test.app/Info.plist",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        let fixture = Dictionary::from_iter([("CFBundleIdentifier", "test.beygram.fixture")]);
+        let mut plist = Vec::new();
+        plist::to_writer_xml(&mut plist, &fixture).unwrap();
+        zip.write_all(&plist).unwrap();
+        zip.finish().unwrap();
+
+        let package = Package::new(path).unwrap();
+        let first = package.get_package_bundle().unwrap();
+        let second = package.get_package_bundle().unwrap();
+        assert_ne!(first.bundle_dir(), second.bundle_dir());
+        let rebuilt = package
+            .get_archive_based_on_path(second.bundle_dir())
+            .unwrap();
+        let mut zip = ZipArchive::new(fs::File::open(rebuilt).unwrap()).unwrap();
+        let mut recovered = Vec::new();
+        zip.by_name("Payload/Test.app/Info.plist")
+            .unwrap()
+            .read_to_end(&mut recovered)
+            .unwrap();
+        assert_eq!(recovered, plist);
+        package.remove_package_stage();
+    }
+
+    #[test]
+    fn metadata_size_limit_applies_to_actual_decoded_bytes() {
+        assert_eq!(read_entry(&b"1234"[..], 4).unwrap(), b"1234");
+        assert!(matches!(
+            read_entry(&b"12345"[..], 4),
+            Err(Error::PackageMetadataTooLarge)
+        ));
     }
 }

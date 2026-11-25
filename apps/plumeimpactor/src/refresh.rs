@@ -23,7 +23,7 @@ impl Drop for RefreshGuard {
     fn drop(&mut self) {
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.remove(&self.udid);
-            log::debug!("Released lock for device {}", self.udid);
+            log::debug!("Released device refresh lock");
         }
     }
 }
@@ -84,14 +84,11 @@ impl RefreshDaemon {
                     // We check for active tasks here to prevent the background loop
                     // from even starting a wait if a manual refresh is already running.
                     if self.is_busy(udid) {
-                        log::info!(
-                            "Device {} is already being processed. Skipping this app for now.",
-                            udid
-                        );
+                        log::info!("A refresh is already in progress for the device");
                         continue;
                     }
 
-                    log::info!("App at {:?} needs refresh for device {}", app.path, udid);
+                    log::info!("An app is due for refresh");
 
                     let device = self
                         .connected_devices
@@ -101,16 +98,18 @@ impl RefreshDaemon {
 
                     let Some(device) = device else {
                         log::debug!(
-                            "App at {:?} is due for refresh on {}, but no matching connected device was found. Retrying in {} seconds.",
-                            app.path,
-                            udid,
+                            "A device due for refresh is disconnected. Retrying in {} seconds.",
                             self.check_interval.as_secs()
                         );
                         continue;
                     };
 
-                    if let Err(e) = self.refresh_app(&store, refresh_device, app, &device).await {
-                        log::error!("Error refreshing app: {}", e);
+                    if self
+                        .refresh_app(&store, refresh_device, app, &device)
+                        .await
+                        .is_err()
+                    {
+                        log::error!("Background app refresh failed");
                     }
                 }
             }
@@ -140,10 +139,7 @@ impl RefreshDaemon {
                 .lock()
                 .map_err(|_| "Failed to lock task registry")?;
             if tasks.contains(&device.udid) {
-                log::warn!(
-                    "Refresh already in progress for {}. Aborting duplicate.",
-                    device.udid
-                );
+                log::warn!("Skipped duplicate refresh");
                 return Ok(());
             }
             tasks.insert(device.udid.clone());
@@ -155,7 +151,7 @@ impl RefreshDaemon {
             tasks: self.active_tasks.clone(),
         };
 
-        log::info!("Starting refresh for app at {:?}", app.path);
+        log::info!("Starting app refresh");
 
         notify_rust::Notification::new()
             .summary("Impactor")
@@ -195,14 +191,12 @@ impl RefreshDaemon {
         };
 
         let identity_is_new = {
-            let mut on_certificate_reset = crate::certificate_reset::confirm;
             let identity = CertificateIdentity::new_with_session(
                 &session,
                 get_data_path(),
                 None,
                 team_id,
-                false,
-                Some(&mut on_certificate_reset),
+                None,
             )
             .await
             .map_err(|e| format!("Failed to create identity: {}", e))?;
@@ -239,7 +233,7 @@ impl RefreshDaemon {
         self.update_refresh_schedule(store, refresh_device, app)
             .await?;
 
-        log::info!("Successfully refreshed app at {:?}", app.path);
+        log::info!("App refresh succeeded");
 
         notify_rust::Notification::new()
             .summary("Impactor")
@@ -276,14 +270,12 @@ impl RefreshDaemon {
         };
 
         let team_id_string = team_id.to_string();
-        let mut on_certificate_reset = crate::certificate_reset::confirm;
         let signing_identity = CertificateIdentity::new_with_session(
             session,
             get_data_path(),
             None,
             &team_id_string,
-            false,
-            Some(&mut on_certificate_reset),
+            None,
         )
         .await
         .map_err(|e| format!("Failed to create signing identity: {}", e))?;
@@ -367,16 +359,26 @@ impl RefreshDaemon {
             .unwrap_or_else(|_| Utc::now() + chrono::Duration::days(4));
         let scheduled_refresh = scheduled_refresh - chrono::Duration::days(3);
 
-        let mut store = store.clone();
-        let mut updated_device = refresh_device.clone();
+        let mut latest = AccountStore::load(&store.path())
+            .await
+            .map_err(|err| format!("Failed to reload refresh schedule: {err}"))?;
+        let Some(mut updated_device) = latest.get_refresh_device(&refresh_device.udid).cloned()
+        else {
+            return Ok(());
+        };
+        let Some(existing_app) = updated_device
+            .apps
+            .iter_mut()
+            .find(|entry| entry.path == app.path)
+        else {
+            return Ok(());
+        };
+        existing_app.scheduled_refresh = scheduled_refresh;
 
-        if let Some(existing_app) = updated_device.apps.iter_mut().find(|a| a.path == app.path) {
-            existing_app.scheduled_refresh = scheduled_refresh;
-        }
-
-        store
-            .add_or_update_refresh_device_sync(updated_device)
-            .map_err(|e| format!("Failed to update refresh schedule: {}", e))?;
+        latest
+            .add_or_update_refresh_device(updated_device)
+            .await
+            .map_err(|err| format!("Failed to update refresh schedule: {err}"))?;
 
         log::info!("Next refresh scheduled for: {}", scheduled_refresh);
 

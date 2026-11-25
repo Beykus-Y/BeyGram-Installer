@@ -5,13 +5,11 @@ pub(crate) mod settings;
 mod utilties;
 mod windows;
 
-use std::collections::VecDeque;
-
 use iced::Length::Fill;
-use iced::widget::operation::{focus_next,focus_previous};
-use iced::widget::{button, column, container, pick_list, row, stack, text};
 use iced::event::{self, Event, Status};
 use iced::keyboard::{self, Key, key};
+use iced::widget::operation::{focus_next, focus_previous};
+use iced::widget::{button, column, container, pick_list, row, text};
 use iced::window;
 use iced::{Element, Subscription, Task};
 
@@ -37,7 +35,9 @@ pub enum Message {
     NavigateToScreen(ImpactorScreenType),
     NextScreen,
     PreviousScreen,
-    TabPressed { shift: bool },
+    TabPressed {
+        shift: bool,
+    },
 
     // Device management
     ComboBoxSelected(String),
@@ -78,9 +78,6 @@ pub enum Message {
     SettingsScreen(settings::Message),
     InstallerScreen(package::Message),
     ProgressScreen(progress::Message),
-    CertificateResetRequested(crate::certificate_reset::ConfirmationRequest),
-    ConfirmCertificateReset,
-    CancelCertificateReset,
 
     // Installation
     StartInstallation,
@@ -97,7 +94,6 @@ pub struct Impactor {
     account_store: Option<AccountStore>,
     login_windows: std::collections::HashMap<window::Id, login_window::LoginWindow>,
     pending_installation: bool,
-    certificate_reset_queue: VecDeque<crate::certificate_reset::ConfirmationRequest>,
     selected_locale: Option<String>,
 }
 
@@ -122,8 +118,13 @@ impl Impactor {
     pub fn new() -> (Self, Task<Message>) {
         let mut tray = ImpactorTray::new();
         let store = Self::init_account_store_sync();
-        tray.update_refresh_apps(&store);
-        let selected_locale = store.locale().map(str::to_string);
+        if let Some(store) = &store {
+            tray.update_refresh_apps(store);
+        }
+        let selected_locale = store
+            .as_ref()
+            .and_then(AccountStore::locale)
+            .map(str::to_string);
         if let Some(code) = &selected_locale {
             rust_i18n::set_locale(code);
         }
@@ -146,30 +147,23 @@ impl Impactor {
                 selected_device: None,
                 tray: Some(tray),
                 main_window,
-                account_store: Some(store),
+                account_store: store,
                 login_windows: std::collections::HashMap::new(),
                 pending_installation: false,
-                certificate_reset_queue: VecDeque::new(),
                 selected_locale,
             },
             open_task,
         )
     }
 
-    fn init_account_store_sync() -> AccountStore {
+    fn init_account_store_sync() -> Option<AccountStore> {
         let path = defaults::get_data_path().join("accounts.json");
-        AccountStore::load_sync(&Some(path)).unwrap_or_default()
-    }
-
-    fn respond_to_next_certificate_reset(&mut self, accepted: bool) {
-        if let Some(request) = self.certificate_reset_queue.pop_front() {
-            request.respond(accepted);
-        }
-    }
-
-    fn cancel_pending_certificate_resets(&mut self) {
-        while let Some(request) = self.certificate_reset_queue.pop_front() {
-            request.respond(false);
+        match AccountStore::load_sync(&Some(path)) {
+            Ok(store) => Some(store),
+            Err(error) => {
+                log::error!("Unable to load account store: {error}");
+                None
+            }
         }
     }
 
@@ -379,22 +373,6 @@ impl Impactor {
                     Task::none()
                 }
             }
-            Message::CertificateResetRequested(request) => {
-                self.certificate_reset_queue.push_back(request);
-                if self.main_window.is_none() {
-                    Task::done(Message::ShowWindow)
-                } else {
-                    Task::none()
-                }
-            }
-            Message::ConfirmCertificateReset => {
-                self.respond_to_next_certificate_reset(true);
-                Task::none()
-            }
-            Message::CancelCertificateReset => {
-                self.respond_to_next_certificate_reset(false);
-                Task::none()
-            }
             Message::ShowWindow => {
                 crate::macos_app::set_main_window_visible(true);
                 if let Some(id) = self.main_window {
@@ -407,7 +385,6 @@ impl Impactor {
             }
             Message::HideWindow => {
                 if let Some(id) = self.main_window {
-                    self.cancel_pending_certificate_resets();
                     self.main_window = None;
                     crate::macos_app::set_main_window_visible(false);
                     window::close(id)
@@ -425,12 +402,12 @@ impl Impactor {
 
                     if matches!(
                         msg,
-                        login_window::Message::LoginSuccess(_)
+                        login_window::Message::LoginSuccess
                             | login_window::Message::LoginCancel
                             | login_window::Message::TwoFactorCancel
                     ) {
                         self.login_windows.remove(&id);
-                        self.account_store = Some(Self::init_account_store_sync());
+                        self.account_store = Self::init_account_store_sync();
 
                         if let ImpactorScreen::Settings(_) = self.current_screen {
                             self.current_screen =
@@ -438,7 +415,7 @@ impl Impactor {
                         }
 
                         if self.pending_installation {
-                            if matches!(msg, login_window::Message::LoginSuccess(_)) {
+                            if matches!(msg, login_window::Message::LoginSuccess) {
                                 self.pending_installation = false;
                                 return Task::batch(vec![
                                     window::close(id),
@@ -533,8 +510,17 @@ impl Impactor {
                                         .build()
                                         .unwrap();
 
-                                    let _ = rt.block_on(async move {
-                                        crate::subscriptions::export_certificate(account).await
+                                    rt.block_on(async move {
+                                        if let Err(error) =
+                                            crate::subscriptions::export_certificate(account).await
+                                        {
+                                            rfd::AsyncMessageDialog::new()
+                                                .set_level(rfd::MessageLevel::Error)
+                                                .set_title("Certificate export failed")
+                                                .set_description(error)
+                                                .show()
+                                                .await;
+                                        }
                                     });
                                 });
                             }
@@ -591,7 +577,7 @@ impl Impactor {
                                 {
                                     log::error!("Failed to update team: {:?}", e);
                                 } else {
-                                    self.account_store = Some(Self::init_account_store_sync());
+                                    self.account_store = Self::init_account_store_sync();
                                 }
                             }
                             screen.update(msg).map(Message::SettingsScreen)
@@ -772,13 +758,13 @@ impl Impactor {
                             let _ = store.add_or_update_refresh_device_sync(refresh_device);
                         }
 
-                        self.account_store = Some(Self::init_account_store_sync());
+                        self.account_store = Self::init_account_store_sync();
                     }
                 }
                 Task::done(Message::UpdateTrayMenu)
             }
             Message::UpdateTrayMenu => {
-                self.account_store = Some(Self::init_account_store_sync());
+                self.account_store = Self::init_account_store_sync();
 
                 if let Some(store) = &self.account_store {
                     match &mut self.tray {
@@ -831,12 +817,13 @@ impl Impactor {
                     ..
                 }),
                 Status::Ignored,
-            ) => Some(Message::TabPressed { shift: modifiers.shift() }),
+            ) => Some(Message::TabPressed {
+                shift: modifiers.shift(),
+            }),
             _ => None,
         });
 
         let tray_menu_refresh_subscription = subscriptions::tray_menu_refresh_subscription();
-        let certificate_reset_subscription = subscriptions::certificate_reset_subscription();
         let relaunch_subscription = subscriptions::relaunch_subscription();
 
         let close_subscription = iced::event::listen_with(|event, _status, _id| {
@@ -852,7 +839,6 @@ impl Impactor {
             hover_subscription,
             progress_subscription,
             tray_menu_refresh_subscription,
-            certificate_reset_subscription,
             relaunch_subscription,
             close_subscription,
             tab_subscription,
@@ -869,16 +855,9 @@ impl Impactor {
         let has_device = self.selected_device.is_some();
         let screen_content = self.view_current_screen(has_device);
         let top_bar = self.view_top_bar();
-        let base: Element<'_, Message> =
-            container(column(vec![top_bar, screen_content]).spacing(appearance::THEME_PADDING))
-                .padding(appearance::THEME_PADDING)
-                .into();
-
-        if self.certificate_reset_queue.front().is_some() {
-            stack![base, self.view_certificate_reset_prompt()].into()
-        } else {
-            base
-        }
+        container(column(vec![top_bar, screen_content]).spacing(appearance::THEME_PADDING))
+            .padding(appearance::THEME_PADDING)
+            .into()
     }
 
     fn view_current_screen(&self, has_device: bool) -> Element<'_, Message> {
@@ -934,57 +913,6 @@ impl Impactor {
         )
         .width(Fill)
         .into()
-    }
-
-    fn view_certificate_reset_prompt(&self) -> Element<'_, Message> {
-        let Some(request) = self.certificate_reset_queue.front() else {
-            return container(text("")).into();
-        };
-
-        let actions = row![
-            button(text("Cancel"))
-                .on_press(Message::CancelCertificateReset)
-                .style(appearance::s_button),
-            button(text("Continue"))
-                .on_press(Message::ConfirmCertificateReset)
-                .style(appearance::p_button),
-        ]
-        .spacing(appearance::THEME_PADDING);
-
-        let dialog = container(
-            column![
-                text("Certificate reset required").size(appearance::THEME_FONT_SIZE + 2.0),
-                text(&request.message),
-                actions,
-            ]
-            .spacing(appearance::THEME_PADDING),
-        )
-        .padding(appearance::THEME_PADDING * 2.0)
-        .max_width(420.0)
-        .style(|theme: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(theme.palette().background)),
-            border: iced::Border {
-                width: 1.0,
-                color: theme.palette().warning,
-                radius: appearance::THEME_CORNER_RADIUS.into(),
-            },
-            ..Default::default()
-        });
-
-        container(dialog)
-            .width(Fill)
-            .height(Fill)
-            .center(Fill)
-            .style(|_theme: &iced::Theme| container::Style {
-                background: Some(iced::Background::Color(iced::Color {
-                    r: 0.0,
-                    g: 0.0,
-                    b: 0.0,
-                    a: 0.45,
-                })),
-                ..Default::default()
-            })
-            .into()
     }
 
     fn navigate_to_screen(&mut self, screen_type: ImpactorScreenType) {

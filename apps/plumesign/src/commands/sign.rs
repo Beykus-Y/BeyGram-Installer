@@ -93,15 +93,9 @@ pub async fn execute(args: SignArgs) -> Result<()> {
     } else if args.apple_id {
         let session = get_authenticated_account().await?;
         let team_id = teams(&session).await?;
-        let cert_identity = CertificateIdentity::new_with_session(
-            &session,
-            get_data_path(),
-            None,
-            &team_id,
-            false,
-            None,
-        )
-        .await?;
+        let cert_identity =
+            CertificateIdentity::new_with_session(&session, get_data_path(), None, &team_id, None)
+                .await?;
 
         options.mode = SignerMode::Pem;
         (

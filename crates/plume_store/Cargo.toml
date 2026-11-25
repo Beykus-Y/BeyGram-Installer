@@ -8,8 +8,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+plume_secrets = { path = "../plume_secrets" }
 tokio.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+zeroize = "1"
 plume_core = { path = "../plume_core", features = ["tweaks"] }

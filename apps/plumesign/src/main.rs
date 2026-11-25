@@ -10,7 +10,7 @@ use commands::{Cli, Commands};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+    plume_core::init_logging();
     let _ = rustls::crypto::ring::default_provider().install_default();
     let cli = Cli::parse();
 
@@ -28,9 +28,7 @@ pub fn get_data_path() -> PathBuf {
     let base = if cfg!(windows) {
         env::var("APPDATA").unwrap()
     } else {
-        env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
-            env::var("HOME").unwrap() + "/.config"
-        })
+        env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| env::var("HOME").unwrap() + "/.config")
     };
 
     let dir = Path::new(&base).join("PlumeImpactor");

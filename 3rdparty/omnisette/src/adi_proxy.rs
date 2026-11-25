@@ -1,16 +1,19 @@
 use crate::AnisetteError;
 use crate::adi_proxy::ProvisioningError::InvalidResponse;
 use crate::anisette_headers_provider::AnisetteHeadersProvider;
+use crate::transport::{
+    APPLE_LOOKUP_URL, dictionary_at, http_builder, parse_dictionary, provisioning_url, string_at,
+};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as base64_engine;
 use log::debug;
 use plist::{Dictionary, Value};
 use rand::RngCore;
 #[cfg(not(feature = "async"))]
-use reqwest::blocking::{Client, ClientBuilder, Response};
+use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, HeaderValue, InvalidHeaderValue};
 #[cfg(feature = "async")]
-use reqwest::{Client, ClientBuilder, Response};
+use reqwest::{Client, Response};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -21,12 +24,13 @@ use thiserror::Error;
 #[derive(Debug)]
 pub struct ServerError {
     pub code: i64,
-    pub description: String,
 }
 
 #[derive(Debug)]
 pub enum ProvisioningError {
     InvalidResponse,
+    UntrustedEndpoint,
+    HttpStatus(u16),
     ServerError(ServerError),
 }
 
@@ -65,11 +69,10 @@ trait ToPlist {
 impl ToPlist for Response {
     #[cfg_attr(not(feature = "async"), remove_async_await::remove_async_await)]
     async fn plist(self) -> Result<Dictionary, ADIError> {
-        if let Ok(property_list) = Value::from_reader_xml(&*self.bytes().await?) {
-            Ok(property_list.as_dictionary().unwrap().to_owned())
-        } else {
-            Err(ProvisioningError::InvalidResponse.into())
+        if !self.status().is_success() {
+            return Err(ProvisioningError::HttpStatus(self.status().as_u16()).into());
         }
+        Ok(parse_dictionary(&self.bytes().await?)?)
     }
 }
 
@@ -135,28 +138,22 @@ trait AppleRequestResult {
 
 impl AppleRequestResult for Dictionary {
     fn check_status(&self) -> Result<(), ADIError> {
-        let status = self
-            .get("Status")
-            .ok_or(InvalidResponse)?
-            .as_dictionary()
-            .unwrap();
-        let code = status.get("ec").unwrap().as_signed_integer().unwrap();
+        let status = dictionary_at(self, "Status")?;
+        let code = status
+            .get("ec")
+            .and_then(Value::as_signed_integer)
+            .ok_or(InvalidResponse)?;
         if code != 0 {
-            let description = status.get("em").unwrap().as_string().unwrap().to_string();
-            Err(ProvisioningError::ServerError(ServerError { code, description }).into())
+            Err(ProvisioningError::ServerError(ServerError { code }).into())
         } else {
             Ok(())
         }
     }
 
     fn get_response(&self) -> Result<&Dictionary, ADIError> {
-        if let Some(response) = self.get("Response") {
-            let response = response.as_dictionary().unwrap();
-            response.check_status()?;
-            Ok(response)
-        } else {
-            Err(InvalidResponse.into())
-        }
+        let response = dictionary_at(self, "Response")?;
+        response.check_status()?;
+        Ok(response)
     }
 }
 
@@ -178,11 +175,7 @@ impl dyn ADIProxy {
             HeaderValue::from_str(self.get_serial_number().as_str())?,
         );
 
-        debug!("Headers sent: {headers:?}");
-
-        let http_client = ClientBuilder::new()
-            .http1_title_case_headers()
-            .danger_accept_invalid_certs(true) // TODO: pin the apple certificate
+        let http_client = http_builder()
             .user_agent(AKD_USER_AGENT)
             .default_headers(headers)
             .build()?;
@@ -195,25 +188,15 @@ impl dyn ADIProxy {
         let client = self.make_http_client()?;
 
         let url_bag_res = client
-            .get("https://gsa.apple.com/grandslam/GsService2/lookup")
+            .get(APPLE_LOOKUP_URL)
             .header("X-Mme-Client-Info", LOOKUP_CLIENT_INFO)
             .send()
             .await?
             .plist()
             .await?;
 
-        let urls = url_bag_res.get("urls").unwrap().as_dictionary().unwrap();
-
-        let start_provisioning_url = urls
-            .get("midStartProvisioning")
-            .unwrap()
-            .as_string()
-            .unwrap();
-        let finish_provisioning_url = urls
-            .get("midFinishProvisioning")
-            .unwrap()
-            .as_string()
-            .unwrap();
+        let start_provisioning_url = provisioning_url(&url_bag_res, "midStartProvisioning")?;
+        let finish_provisioning_url = provisioning_url(&url_bag_res, "midFinishProvisioning")?;
 
         let mut body = plist::Dictionary::new();
         body.insert(
@@ -239,14 +222,7 @@ impl dyn ADIProxy {
 
         let response = response.get_response()?;
 
-        let spim = response
-            .get("spim")
-            .unwrap()
-            .as_string()
-            .unwrap()
-            .to_owned();
-
-        let spim = base64_engine.decode(spim)?;
+        let spim = base64_engine.decode(string_at(response, "spim")?)?;
         let first_step = self.start_provisioning(DS_ID, spim.as_slice())?;
 
         let mut body = Dictionary::new();
@@ -272,8 +248,8 @@ impl dyn ADIProxy {
 
         let response = response.get_response()?;
 
-        let ptm = base64_engine.decode(response.get("ptm").unwrap().as_string().unwrap())?;
-        let tk = base64_engine.decode(response.get("tk").unwrap().as_string().unwrap())?;
+        let ptm = base64_engine.decode(string_at(response, "ptm")?)?;
+        let tk = base64_engine.decode(string_at(response, "tk")?)?;
 
         self.end_provisioning(first_step.session, ptm.as_slice(), tk.as_slice())?;
         debug!("Done.");

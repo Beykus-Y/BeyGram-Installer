@@ -20,26 +20,6 @@ impl DeveloperSession {
         Ok(response_data)
     }
 
-    pub async fn qh_revoke_cert(
-        &self,
-        team_id: &String,
-        serial_number: &String,
-    ) -> Result<QHResponseMeta, Error> {
-        let endpoint = developer_endpoint!("/QH65B2/ios/revokeDevelopmentCert.action");
-
-        let mut body = Dictionary::new();
-        body.insert("teamId".to_string(), Value::String(team_id.clone()));
-        body.insert(
-            "serialNumber".to_string(),
-            Value::String(serial_number.clone()),
-        );
-
-        let response = self.qh_send_request(&endpoint, Some(body)).await?;
-        let response_data: QHResponseMeta = plist::from_value(&Value::Dictionary(response))?;
-
-        Ok(response_data)
-    }
-
     pub async fn qh_submit_cert_csr(
         &self,
         team_id: &String,

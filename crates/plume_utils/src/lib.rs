@@ -39,12 +39,18 @@ pub enum Error {
     #[error("Unsupported file type: {0}")]
     UnsupportedFileType(String),
 
+    #[error("IPA archive contains an unsupported path or file type")]
+    UnsafePackageEntry,
+    #[error("IPA metadata exceeds the size limit")]
+    PackageMetadataTooLarge,
     #[error("Zip error: {0}")]
     Zip(#[from] zip::result::ZipError),
     #[error("Info.plist not found")]
     PackageInfoPlistMissing,
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    SecretStorage(#[from] plume_secrets::Error),
     #[error("Plist error: {0}")]
     Plist(#[from] plist::Error),
     #[error("Core error: {0}")]

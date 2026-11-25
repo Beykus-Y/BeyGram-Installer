@@ -67,6 +67,7 @@ progress_finished = "Готово!"
 progress_failed = "Ошибка установки"
 
 login_only_set_to_fruit = "Ваш Apple ID используется для подписи и установки приложений. Учётные данные отправляются только в Apple."
+login_anisette_provider = "Anisette работает локально через StoreServicesCore. Идентификаторы и сообщения для подготовки отправляются в Apple."
 login_email = "Email:"
 login_password = "Пароль:"
 login_loading = "Вход в систему..."

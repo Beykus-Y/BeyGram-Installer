@@ -7,7 +7,7 @@ use plume_core::Error;
 
 use crate::{GsaAccount, RefreshDevice};
 
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone)]
 pub struct AccountStore {
     selected_account: Option<String>,      // Email
     accounts: HashMap<String, GsaAccount>, // Email -> GsaAccount
@@ -17,57 +17,53 @@ pub struct AccountStore {
     locale: Option<String>, // None = system locale
     #[serde(skip)]
     path: Option<PathBuf>,
+    #[serde(skip)]
+    revision: Option<plume_secrets::Revision>,
 }
 
 impl AccountStore {
     pub async fn load(path: &Option<PathBuf>) -> Result<Self, Error> {
-        if let Some(path) = path {
-            let mut settings = if !path.exists() {
-                Self::default()
-            } else {
-                let contents = tokio::fs::read_to_string(path).await?;
-                serde_json::from_str(&contents)?
-            };
-            settings.path = Some(path.clone());
-            Ok(settings)
-        } else {
-            Ok(Self::default())
-        }
+        let path = path.clone();
+        tokio::task::spawn_blocking(move || Self::load_sync(&path))
+            .await
+            .map_err(std::io::Error::other)?
     }
 
     pub fn load_sync(path: &Option<PathBuf>) -> Result<Self, Error> {
-        if let Some(path) = path {
-            let mut settings = if !path.exists() {
-                Self::default()
-            } else {
-                let contents = std::fs::read_to_string(path)?;
-                serde_json::from_str(&contents)?
-            };
-            settings.path = Some(path.clone());
-            Ok(settings)
-        } else {
-            Ok(Self::default())
+        let Some(path) = path else {
+            return Ok(Self::default());
+        };
+        let saved = plume_secrets::read_or_migrate_with_revision(path, |bytes| {
+            Ok::<Self, Error>(serde_json::from_slice(bytes)?)
+        })?;
+        let mut settings = Self::default();
+        if let Some((stored, revision)) = saved {
+            settings = stored;
+            settings.revision = Some(revision);
         }
+        settings.path = Some(path.clone());
+        Ok(settings)
     }
 
-    pub async fn save(&self) -> Result<(), Error> {
-        if let Some(path) = &self.path {
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-
-            tokio::fs::write(path, serde_json::to_string_pretty(self)?).await?;
-        }
+    async fn save(&mut self) -> Result<(), Error> {
+        let mut store = self.clone();
+        self.revision = tokio::task::spawn_blocking(move || {
+            store.save_sync()?;
+            Ok::<_, Error>(store.revision)
+        })
+        .await
+        .map_err(std::io::Error::other)??;
         Ok(())
     }
 
-    pub fn save_sync(&self) -> Result<(), Error> {
+    fn save_sync(&mut self) -> Result<(), Error> {
         if let Some(path) = &self.path {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-
-            std::fs::write(path, serde_json::to_string_pretty(self)?)?;
+            let bytes = zeroize::Zeroizing::new(serde_json::to_vec(self)?);
+            self.revision = Some(plume_secrets::write_if_current(
+                path,
+                &bytes,
+                self.revision,
+            )?);
         }
         Ok(())
     }

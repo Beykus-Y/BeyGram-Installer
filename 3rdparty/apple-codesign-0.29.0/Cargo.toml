@@ -161,7 +161,8 @@ version = "0.2.19"
 
 [dependencies.object]
 version = "0.36.5"
-features = ["write"]
+features = ["read", "write"]
+default-features = false
 
 [dependencies.oid-registry]
 version = "0.7.1"
@@ -309,7 +310,7 @@ version = "1.8.1"
 features = ["zeroize_derive"]
 
 [dependencies.zip]
-version = "2.2.1"
+version = "9.0.5"
 features = ["deflate"]
 default-features = false
 
@@ -332,7 +333,7 @@ version = "0.4.43"
 version = "0.14.20"
 
 [dev-dependencies.zip]
-version = "2.2.1"
+version = "9.0.5"
 default-features = false
 
 [features]

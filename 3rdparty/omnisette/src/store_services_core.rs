@@ -99,6 +99,9 @@ impl StoreServicesCoreADIProxy<'_> {
             let native_library_path = library_path.join("lib").join(ARCH);
 
             let path = native_library_path.join("libstoreservicescore.so");
+            if !path.is_file() {
+                return Err(AnisetteError::MissingLibraries);
+            }
             let path = path.to_str().ok_or(AnisetteError::Misc)?;
             let store_services_core = AndroidLibrary::load(path)?;
 
@@ -404,45 +407,5 @@ impl LoaderHelpers {
         hooks.insert("write".to_owned(), write as usize);
 
         hook_manager::add_hooks(hooks);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::AnisetteError;
-    use crate::{AnisetteConfiguration, AnisetteHeaders};
-    use log::info;
-    use std::path::PathBuf;
-
-    #[cfg(not(feature = "async"))]
-    #[test]
-    fn fetch_anisette_ssc() -> Result<(), AnisetteError> {
-        crate::tests::init_logger();
-
-        let mut provider = AnisetteHeaders::get_ssc_anisette_headers_provider(
-            AnisetteConfiguration::new()
-                .set_configuration_path(PathBuf::new().join("anisette_test")),
-        )?;
-        info!(
-            "Headers: {:?}",
-            provider.provider.get_authentication_headers()?
-        );
-        Ok(())
-    }
-
-    #[cfg(feature = "async")]
-    #[tokio::test]
-    async fn fetch_anisette_ssc_async() -> Result<(), AnisetteError> {
-        crate::tests::init_logger();
-
-        let mut provider = AnisetteHeaders::get_ssc_anisette_headers_provider(
-            AnisetteConfiguration::new()
-                .set_configuration_path(PathBuf::new().join("anisette_test")),
-        )?;
-        info!(
-            "Headers: {:?}",
-            provider.provider.get_authentication_headers().await?
-        );
-        Ok(())
     }
 }

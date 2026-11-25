@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   update:
+    if: github.repository == 'claration/impactor'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

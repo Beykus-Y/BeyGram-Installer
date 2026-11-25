@@ -1,8 +1,12 @@
 // Implementing the SideStore Anisette v3 protocol
 
-use std::{collections::HashMap, fs, io::Cursor, path::PathBuf};
+use std::{collections::HashMap, io::Cursor, path::PathBuf};
 
-use crate::adi_proxy::LOOKUP_CLIENT_INFO;
+use crate::adi_proxy::{LOOKUP_CLIENT_INFO, ProvisioningError};
+use crate::transport::{
+    APPLE_LOOKUP_URL, dictionary_at, http_builder, https_url, parse_dictionary, provisioning_url,
+    string_at,
+};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose;
@@ -10,7 +14,7 @@ use chrono::{DateTime, SubsecRound, Utc};
 use futures_util::{SinkExt, stream::StreamExt};
 use log::debug;
 use plist::{Data, Dictionary};
-use reqwest::{Client, ClientBuilder, RequestBuilder};
+use reqwest::{Client, RequestBuilder, Response, Url};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
@@ -58,7 +62,8 @@ where
 {
     let s: Data = Deserialize::deserialize(d)?;
     let s: Vec<u8> = s.into();
-    Ok(s.try_into().unwrap())
+    s.try_into()
+        .map_err(|_| serde::de::Error::custom("Invalid provisioning identifier length"))
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -70,10 +75,6 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 fn base64_encode(data: &[u8]) -> String {
     general_purpose::STANDARD.encode(data)
-}
-
-fn base64_decode(data: &str) -> Vec<u8> {
-    general_purpose::STANDARD.decode(data.trim()).unwrap()
 }
 
 #[derive(Deserialize)]
@@ -126,7 +127,7 @@ impl AnisetteState {
 }
 pub struct AnisetteClient {
     client_info: AnisetteClientInfo,
-    url: String,
+    url: Url,
 }
 
 #[derive(Serialize)]
@@ -136,7 +137,6 @@ struct ProvisionBodyData {
     request: Dictionary,
 }
 
-#[derive(Debug)]
 pub struct AnisetteData {
     machine_id: String,
     one_time_password: String,
@@ -178,22 +178,36 @@ impl AnisetteData {
 }
 
 fn make_reqwest() -> Result<Client, AnisetteError> {
-    Ok(ClientBuilder::new()
-        .http1_title_case_headers()
-        .danger_accept_invalid_certs(true) // TODO: pin the apple certificate
-        .build()?)
+    Ok(http_builder().build()?)
+}
+
+pub(crate) fn provider_url(value: &str) -> Result<Url, AnisetteError> {
+    https_url(value)
+        .filter(|url| url.query().is_none())
+        .ok_or_else(|| {
+            AnisetteError::InvalidArgument(
+                "Anisette provider must be an HTTPS URL without credentials, query or fragment"
+                    .into(),
+            )
+        })
+}
+
+fn checked(response: Response) -> Result<Response, ProvisioningError> {
+    if response.status().is_success() {
+        Ok(response)
+    } else {
+        Err(ProvisioningError::HttpStatus(response.status().as_u16()))
+    }
 }
 
 impl AnisetteClient {
     pub async fn new(url: String) -> Result<AnisetteClient, AnisetteError> {
-        let path = format!("{}/v3/client_info", url);
-        let http_client = make_reqwest()?;
-        let client_info = http_client
-            .get(path)
-            .send()
-            .await?
+        let url = provider_url(&url)?;
+        let path = format!("{}/v3/client_info", url.as_str().trim_end_matches('/'));
+        let client_info = checked(make_reqwest()?.get(path).send().await?)?
             .json::<AnisetteClientInfo>()
-            .await?;
+            .await
+            .map_err(|_| ProvisioningError::InvalidResponse)?;
         Ok(AnisetteClient { client_info, url })
     }
 
@@ -217,7 +231,7 @@ impl AnisetteClient {
     }
 
     pub async fn get_headers(&self, state: &AnisetteState) -> Result<AnisetteData, AnisetteError> {
-        let path = format!("{}/v3/get_headers", self.url);
+        let path = format!("{}/v3/get_headers", self.url.as_str().trim_end_matches('/'));
         let http_client = make_reqwest()?;
 
         #[derive(Serialize)]
@@ -251,19 +265,16 @@ impl AnisetteClient {
             },
         }
 
-        let headers = http_client
-            .post(path)
-            .json(&body)
-            .send()
-            .await?
+        let headers = checked(http_client.post(path).json(&body).send().await?)?
             .json::<AnisetteHeaders>()
-            .await?;
+            .await
+            .map_err(|_| ProvisioningError::InvalidResponse)?;
         match headers {
             AnisetteHeaders::GetHeadersError { message } => {
                 if message.contains("-45061") {
                     Err(AnisetteError::AnisetteNotProvisioned)
                 } else {
-                    panic!("Unknown error {}", message)
+                    Err(ProvisioningError::InvalidResponse.into())
                 }
             }
             AnisetteHeaders::Headers {
@@ -287,40 +298,25 @@ impl AnisetteClient {
         let resp = self
             .build_apple_request(
                 &state,
-                http_client.get("https://gsa.apple.com/grandslam/GsService2/lookup"),
+                http_client.get(APPLE_LOOKUP_URL),
                 LOOKUP_CLIENT_INFO,
             )
             .send()
             .await?;
-        let text = resp.text().await?;
+        let lookup = parse_dictionary(&checked(resp)?.bytes().await?)?;
+        let start_provisioning_url = provisioning_url(&lookup, "midStartProvisioning")?;
+        let end_provisioning_url = provisioning_url(&lookup, "midFinishProvisioning")?;
 
-        let protocol_val = plist::Value::from_reader(Cursor::new(text.as_str()))?;
-        let urls = protocol_val
-            .as_dictionary()
-            .unwrap()
-            .get("urls")
-            .unwrap()
-            .as_dictionary()
-            .unwrap();
-
-        let start_provisioning_url = urls
-            .get("midStartProvisioning")
-            .unwrap()
-            .as_string()
-            .unwrap();
-        let end_provisioning_url = urls
-            .get("midFinishProvisioning")
-            .unwrap()
-            .as_string()
-            .unwrap();
-        debug!(
-            "Got provisioning urls: {} and {}",
-            start_provisioning_url, end_provisioning_url
+        let mut provision_ws_url = self.url.clone();
+        let path = format!(
+            "{}/v3/provisioning_session",
+            provision_ws_url.path().trim_end_matches('/')
         );
-
-        let provision_ws_url =
-            format!("{}/v3/provisioning_session", self.url).replace("https://", "wss://");
-        let (mut connection, _) = connect_async(&provision_ws_url).await?;
+        provision_ws_url.set_path(&path);
+        provision_ws_url
+            .set_scheme("wss")
+            .map_err(|_| ProvisioningError::UntrustedEndpoint)?;
+        let (mut connection, _) = connect_async(provision_ws_url.as_str()).await?;
 
         #[derive(Deserialize)]
         #[serde(tag = "result")]
@@ -337,12 +333,10 @@ impl AnisetteClient {
             },
         }
 
-        loop {
-            let Some(Ok(data)) = connection.next().await else {
-                continue;
-            };
+        while let Some(data) = connection.next().await {
+            let data = data?;
             if data.is_text() {
-                let txt = data.to_text().unwrap();
+                let txt = data.to_text()?;
                 let msg: ProvisionInput = serde_json::from_str(txt)?;
                 match msg {
                     ProvisionInput::GiveIdentifier => {
@@ -366,26 +360,14 @@ impl AnisetteClient {
                         let resp = self
                             .build_apple_request(
                                 state,
-                                http_client.post(start_provisioning_url),
+                                http_client.post(start_provisioning_url.clone()),
                                 &self.client_info.client_info,
                             )
                             .body(plist_to_string(&body_data)?)
                             .send()
                             .await?;
-                        let text = resp.text().await?;
-
-                        let protocol_val = plist::Value::from_reader(Cursor::new(text.as_str()))?;
-                        let spim = protocol_val
-                            .as_dictionary()
-                            .unwrap()
-                            .get("Response")
-                            .unwrap()
-                            .as_dictionary()
-                            .unwrap()
-                            .get("spim")
-                            .unwrap()
-                            .as_string()
-                            .unwrap();
+                        let protocol_val = parse_dictionary(&checked(resp)?.bytes().await?)?;
+                        let spim = string_at(dictionary_at(&protocol_val, "Response")?, "spim")?;
 
                         debug!("GiveStartProvisioningData");
                         #[derive(Serialize)]
@@ -408,22 +390,14 @@ impl AnisetteClient {
                         let resp = self
                             .build_apple_request(
                                 state,
-                                http_client.post(end_provisioning_url),
+                                http_client.post(end_provisioning_url.clone()),
                                 &self.client_info.client_info,
                             )
                             .body(plist_to_string(&body_data)?)
                             .send()
                             .await?;
-                        let text = resp.text().await?;
-
-                        let protocol_val = plist::Value::from_reader(Cursor::new(text.as_str()))?;
-                        let response = protocol_val
-                            .as_dictionary()
-                            .unwrap()
-                            .get("Response")
-                            .unwrap()
-                            .as_dictionary()
-                            .unwrap();
+                        let protocol_val = parse_dictionary(&checked(resp)?.bytes().await?)?;
+                        let response = dictionary_at(&protocol_val, "Response")?;
 
                         debug!("GiveEndProvisioningData");
 
@@ -433,8 +407,8 @@ impl AnisetteClient {
                             tk: &'t str,
                         }
                         let end_provisioning = EndProvisioning {
-                            ptm: response.get("ptm").unwrap().as_string().unwrap(),
-                            tk: response.get("tk").unwrap().as_string().unwrap(),
+                            ptm: string_at(response, "ptm")?,
+                            tk: string_at(response, "tk")?,
                         };
                         connection
                             .send(Message::Text(
@@ -444,9 +418,15 @@ impl AnisetteClient {
                     }
                     ProvisionInput::ProvisioningSuccess { adi_pb } => {
                         debug!("ProvisioningSuccess");
-                        state.adi_pb = Some(base64_decode(&adi_pb));
+                        let adi_pb = general_purpose::STANDARD
+                            .decode(adi_pb.trim())
+                            .map_err(|_| ProvisioningError::InvalidResponse)?;
+                        if adi_pb.is_empty() {
+                            return Err(ProvisioningError::InvalidResponse.into());
+                        }
+                        state.adi_pb = Some(adi_pb);
                         connection.close(None).await?;
-                        break;
+                        return Ok(());
                     }
                 }
             } else if data.is_close() {
@@ -454,7 +434,7 @@ impl AnisetteClient {
             }
         }
 
-        Ok(())
+        Err(ProvisioningError::InvalidResponse.into())
     }
 }
 
@@ -493,21 +473,25 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
         }
         let client = self.client.as_ref().unwrap();
 
-        fs::create_dir_all(&self.configuration_path)?;
-
-        let config_path = self.configuration_path.join("state.plist");
+        // A newly selected service must never receive another service's ADI blob.
+        let provider_id = encode_hex(&Sha256::digest(client.url.as_str().as_bytes()));
+        let config_path = self
+            .configuration_path
+            .join(format!("state-{provider_id}.plist"));
         if self.state.is_none() {
-            self.state = Some(if let Ok(text) = plist::from_file(&config_path) {
-                text
-            } else {
-                AnisetteState::new()
-            });
+            self.state = Some(
+                plume_secrets::read_or_migrate(&config_path, |bytes| {
+                    Ok::<AnisetteState, AnisetteError>(plist::from_bytes(bytes)?)
+                })?
+                .unwrap_or_default(),
+            );
         }
 
         let state = self.state.as_mut().unwrap();
         if !state.is_provisioned() {
+            plume_secrets::prepare(&config_path)?;
             client.provision(state).await?;
-            plist::to_file_xml(&config_path, state)?;
+            plume_secrets::write(&config_path, &plist_to_buf(state)?)?;
         }
         let data = match client.get_headers(&state).await {
             Ok(data) => data,
@@ -515,10 +499,10 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
                 if matches!(err, AnisetteError::AnisetteNotProvisioned) {
                     state.adi_pb = None;
                     client.provision(state).await?;
-                    plist::to_file_xml(config_path, state)?;
+                    plume_secrets::write(&config_path, &plist_to_buf(state)?)?;
                     client.get_headers(&state).await?
                 } else {
-                    panic!()
+                    return Err(err);
                 }
             }
         };
@@ -528,26 +512,96 @@ impl AnisetteHeadersProvider for RemoteAnisetteProviderV3 {
 
 #[cfg(test)]
 mod tests {
-    use crate::anisette_headers_provider::AnisetteHeadersProvider;
-    use crate::remote_anisette_v3::RemoteAnisetteProviderV3;
-    use crate::{AnisetteError, DEFAULT_ANISETTE_URL_V3};
-    use log::info;
+    use super::*;
+    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+        time::Duration,
+    };
+
+    fn serve_tls(response: Option<&'static [u8]>) -> (String, Vec<u8>, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        let cert = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let der = cert.serialize_der().unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(
+            rustls::crypto::ring::default_provider().into(),
+        )
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![CertificateDer::from(der.clone())],
+            PrivatePkcs8KeyDer::from(cert.serialize_private_key_der()).into(),
+        )
+        .unwrap();
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let connection = rustls::ServerConnection::new(config.into()).unwrap();
+            let mut tls = rustls::StreamOwned::new(connection, socket);
+            let mut request = Vec::new();
+            let mut byte = [0];
+            while !request.ends_with(b"\r\n\r\n") {
+                match tls.read_exact(&mut byte) {
+                    Ok(()) => request.push(byte[0]),
+                    Err(_) if response.is_none() => return,
+                    Err(err) => panic!("Synthetic HTTPS request failed: {err}"),
+                }
+            }
+            tls.write_all(response.expect("untrusted TLS delivered an HTTP request"))
+                .unwrap();
+            tls.flush().unwrap();
+        });
+        (address, der, server)
+    }
 
     #[tokio::test]
-    async fn fetch_anisette_remote_v3() -> Result<(), AnisetteError> {
-        crate::tests::init_logger();
+    async fn untrusted_certificate_is_rejected_by_https_and_websocket() {
+        let (address, _, server) = serve_tls(None);
+        let error = http_builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("https://{address}"))
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.is_connect());
+        server.join().unwrap();
 
-        let mut provider = RemoteAnisetteProviderV3::new(
-            DEFAULT_ANISETTE_URL_V3.to_string(),
-            "anisette_test".into(),
-            "0".to_string(),
+        let (address, _, server) = serve_tls(None);
+        let error = connect_async(format!("wss://{address}")).await.unwrap_err();
+        assert!(
+            matches!(error, tokio_tungstenite::tungstenite::Error::Io(ref error)
+            if error.kind() == std::io::ErrorKind::InvalidData)
         );
-        info!(
-            "Remote headers: {:?}",
-            (&mut provider as &mut dyn AnisetteHeadersProvider)
-                .get_authentication_headers()
-                .await?
-        );
-        Ok(())
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn trusted_https_redirect_is_returned_without_following_it() {
+        let (address, cert, server) = serve_tls(Some(
+            b"HTTP/1.1 302 Found\r\nLocation: https://127.0.0.1:1/leak\r\nContent-Length: 0\r\n\r\n",
+        ));
+        let client = http_builder()
+            .no_proxy()
+            .tls_certs_only([reqwest::Certificate::from_der(&cert).unwrap()])
+            .build()
+            .unwrap();
+        let response = client
+            .get(format!("https://{address}"))
+            .send()
+            .await
+            .unwrap();
+        assert!(matches!(
+            checked(response),
+            Err(ProvisioningError::HttpStatus(302))
+        ));
+        server.join().unwrap();
     }
 }

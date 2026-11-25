@@ -2,6 +2,9 @@ pub mod auth;
 pub mod developer;
 mod utils;
 
+pub use logging::init_logging;
+mod logging;
+
 pub use apple_codesign::{AppleCodesignError, SettingsScope, SigningSettings, UnifiedSigner};
 
 pub use omnisette::AnisetteConfiguration;
@@ -19,12 +22,10 @@ pub enum Error {
     CertificatePemMissing,
     #[error("Certificate error: {0}")]
     Certificate(String),
-    #[error("Developer API error {result_code} (HTTP {http_code:?}): {message} [URL: {url}]")]
+    #[error("Developer API error {result_code} (HTTP {http_code:?})")]
     DeveloperApi {
-        url: String,
         result_code: i64,
         http_code: Option<u16>,
-        message: String,
     },
     /// We don't print out the response content because it generally does not matter too much,
     /// and if we display this in a menu then it will probably be way too big.
@@ -47,6 +48,8 @@ pub enum Error {
     Parse, // TODO: better parsing errors
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    SecretStorage(#[from] plume_secrets::Error),
     #[error("Plist error: {0}")]
     Plist(#[from] plist::Error),
     #[error("Codesign error: {0}")]
@@ -83,10 +86,9 @@ pub fn client() -> Result<reqwest::Client, Error> {
     const APPLE_ROOT: &[u8] = include_bytes!("./apple_root.der");
     let client = reqwest::ClientBuilder::new()
         .add_root_certificate(reqwest::Certificate::from_der(APPLE_ROOT)?)
-        // uncomment when debugging w/ charles proxy
-        // .danger_accept_invalid_certs(true)
         .http1_title_case_headers()
-        .connection_verbose(true)
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
         .build()?;
 
     Ok(client)

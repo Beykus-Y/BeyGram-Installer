@@ -14,6 +14,7 @@ use thiserror::Error;
 pub mod adi_proxy;
 pub mod anisette_headers_provider;
 pub mod store_services_core;
+mod transport;
 
 #[cfg(feature = "remote-anisette-v3")]
 pub mod remote_anisette_v3;
@@ -36,11 +37,12 @@ pub enum AnisetteError {
     #[error("Request Error {0}")]
     ReqwestError(#[from] reqwest::Error),
     #[cfg(feature = "remote-anisette-v3")]
-    #[error("Provisioning socket error {0}")]
-    WsError(#[from] tokio_tungstenite::tungstenite::error::Error),
-    #[cfg(feature = "remote-anisette-v3")]
-    #[error("JSON error {0}")]
-    SerdeError(#[from] serde_json::Error),
+    #[error("Anisette provisioning socket failed")]
+    WsError,
+    #[error("Anisette provisioning failed: {0}")]
+    Provisioning(#[from] adi_proxy::ProvisioningError),
+    #[error(transparent)]
+    SecretStorage(#[from] plume_secrets::Error),
     #[error("IO error {0}")]
     IOError(#[from] io::Error),
     #[error("ADI error {0}")]
@@ -49,10 +51,24 @@ pub enum AnisetteError {
     InvalidLibraryFormat,
     #[error("Misc")]
     Misc,
-    #[error("Missing Libraries")]
+    #[error("Local Anisette requires StoreServicesCore libraries. See docs/BUILD.md for setup.")]
     MissingLibraries,
     #[error("{0}")]
     Anyhow(#[from] anyhow::Error),
+}
+
+#[cfg(feature = "remote-anisette-v3")]
+impl From<tokio_tungstenite::tungstenite::Error> for AnisetteError {
+    fn from(_: tokio_tungstenite::tungstenite::Error) -> Self {
+        Self::WsError
+    }
+}
+
+#[cfg(feature = "remote-anisette-v3")]
+impl From<serde_json::Error> for AnisetteError {
+    fn from(_: serde_json::Error) -> Self {
+        adi_proxy::ProvisioningError::InvalidResponse.into()
+    }
 }
 
 pub const DEFAULT_ANISETTE_URL: &str = "https://ani.f1sh.me/";
@@ -62,7 +78,8 @@ pub const DEFAULT_ANISETTE_URL_V3: &str = "https://mac-ani.jkcoxson.com";
 #[derive(Clone, Debug)]
 pub struct AnisetteConfiguration {
     anisette_url: String,
-    anisette_url_v3: String,
+    #[cfg(feature = "remote-anisette-v3")]
+    anisette_url_v3: Option<String>,
     configuration_path: PathBuf,
     macos_serial: String,
 }
@@ -77,7 +94,8 @@ impl AnisetteConfiguration {
     pub fn new() -> AnisetteConfiguration {
         AnisetteConfiguration {
             anisette_url: DEFAULT_ANISETTE_URL.to_string(),
-            anisette_url_v3: DEFAULT_ANISETTE_URL_V3.to_string(),
+            #[cfg(feature = "remote-anisette-v3")]
+            anisette_url_v3: None,
             configuration_path: PathBuf::new(),
             macos_serial: "0".to_string(),
         }
@@ -93,6 +111,16 @@ impl AnisetteConfiguration {
 
     pub fn set_anisette_url(mut self, anisette_url: String) -> AnisetteConfiguration {
         self.anisette_url = anisette_url;
+        self
+    }
+
+    /// Select an approved remote HTTPS provider instead of local StoreServicesCore.
+    ///
+    /// The service receives the provisioning identifier, Apple provisioning
+    /// intermediates, and the ADI provisioning blob. It also sees the client's IP.
+    #[cfg(feature = "remote-anisette-v3")]
+    pub fn set_remote_anisette_v3(mut self, url: String) -> Self {
+        self.anisette_url_v3 = Some(url);
         self
     }
 
@@ -137,21 +165,26 @@ impl AnisetteHeaders {
     pub fn get_anisette_headers_provider(
         configuration: AnisetteConfiguration,
     ) -> Result<AnisetteHeadersProviderRes, AnisetteError> {
-        // TODO: handle Err because it will just go to remote anisette and not tell the user anything
-        if let Ok(ssc_anisette_headers_provider) =
-            AnisetteHeaders::get_ssc_anisette_headers_provider(configuration.clone())
-        {
-            return Ok(ssc_anisette_headers_provider);
+        #[cfg(feature = "remote-anisette-v3")]
+        if let Some(url) = configuration.anisette_url_v3 {
+            let url = remote_anisette_v3::provider_url(&url)?;
+            log::info!(
+                "Using remote Anisette at {}. The provider receives the provisioning identifier, Apple provisioning messages, ADI data and client IP.",
+                url.origin().ascii_serialization()
+            );
+            return Ok(AnisetteHeadersProviderRes::remote(Box::new(
+                remote_anisette_v3::RemoteAnisetteProviderV3::new(
+                    url.to_string(),
+                    configuration.configuration_path,
+                    configuration.macos_serial,
+                ),
+            )));
         }
 
-        #[cfg(feature = "remote-anisette-v3")]
-        return Ok(AnisetteHeadersProviderRes::remote(Box::new(
-            remote_anisette_v3::RemoteAnisetteProviderV3::new(
-                configuration.anisette_url_v3,
-                configuration.configuration_path.clone(),
-                configuration.macos_serial.clone(),
-            ),
-        )));
+        log::info!(
+            "Using local StoreServicesCore Anisette. Provisioning identifiers and messages go to Apple."
+        );
+        Self::get_ssc_anisette_headers_provider(configuration)
     }
 
     pub fn get_ssc_anisette_headers_provider(
@@ -167,45 +200,5 @@ impl AnisetteHeaders {
         Ok(AnisetteHeadersProviderRes::local(Box::new(
             ADIProxyAnisetteProvider::new(ssc_adi_proxy, config_path.to_path_buf())?,
         )))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use log::LevelFilter;
-    use simplelog::{ColorChoice, ConfigBuilder, TermLogger, TerminalMode};
-
-    pub fn init_logger() {
-        if TermLogger::init(
-            LevelFilter::Trace,
-            ConfigBuilder::new()
-                .set_target_level(LevelFilter::Error)
-                .add_filter_allow_str("omnisette")
-                .build(),
-            TerminalMode::Mixed,
-            ColorChoice::Auto,
-        )
-        .is_ok()
-        {}
-    }
-
-    #[cfg(not(feature = "async"))]
-    #[test]
-    fn fetch_anisette_auto() -> Result<()> {
-        use crate::{AnisetteConfiguration, AnisetteHeaders};
-        use log::info;
-        use std::path::PathBuf;
-
-        crate::tests::init_logger();
-
-        let mut provider = AnisetteHeaders::get_anisette_headers_provider(
-            AnisetteConfiguration::new()
-                .set_configuration_path(PathBuf::new().join("anisette_test")),
-        )?;
-        info!(
-            "Headers: {:?}",
-            provider.provider.get_authentication_headers()?
-        );
-        Ok(())
     }
 }

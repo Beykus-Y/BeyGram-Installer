@@ -107,7 +107,7 @@ impl SettingsScreen {
         selected_locale: &'a Option<String>,
     ) -> Element<'a, Message> {
         let Some(store) = account_store else {
-            return column![text(t!("settings_loading_accounts"))]
+            return column![text("Account data could not be opened. Unlock the OS credential store and reopen Settings.")]
                 .spacing(appearance::THEME_PADDING)
                 .padding(appearance::THEME_PADDING)
                 .into();

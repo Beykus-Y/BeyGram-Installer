@@ -5,7 +5,7 @@ use omnisette::{AnisetteConfiguration, AnisetteHeaders};
 
 use crate::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AnisetteData {
     pub base_headers: HashMap<String, String>,
     pub generated_at: SystemTime,
@@ -54,12 +54,11 @@ impl AnisetteData {
         if client_info {
             let client_info = match old_client_info {
                 Some(v) => {
-                    let temp = v.as_str();
-
-                    temp.replace(
-                        temp.split('<').nth(3).unwrap().split('>').nth(0).unwrap(),
-                        "com.apple.AuthKit/1 (com.apple.akd/1.0)",
-                    )
+                    if let Some(app) = v.split('<').nth(3).and_then(|part| part.split_once('>')) {
+                        v.replace(app.0, "com.apple.AuthKit/1 (com.apple.akd/1.0)")
+                    } else {
+                        v
+                    }
                 }
                 None => {
                     return headers;

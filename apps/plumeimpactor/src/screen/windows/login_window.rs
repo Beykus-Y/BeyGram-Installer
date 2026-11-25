@@ -3,7 +3,7 @@ use iced::widget::{button, column, container, row, text, text_input};
 use iced::{Alignment, Element, Fill, Task, window};
 use plume_core::auth::{TwoFactorAction, TwoFactorMethod, TwoFactorRequest};
 use plume_core::{AnisetteConfiguration, auth::Account};
-use plume_store::{AccountStore, GsaAccount};
+use plume_store::AccountStore;
 use rust_i18n::t;
 use std::sync::mpsc as std_mpsc;
 
@@ -15,7 +15,7 @@ pub enum Message {
     PasswordChanged(String),
     LoginSubmit,
     LoginCancel,
-    LoginSuccess(GsaAccount),
+    LoginSuccess,
     LoginFailed(String),
     TwoFactorCodeChanged(String),
     TwoFactorSubmit,
@@ -120,17 +120,8 @@ impl LoginWindow {
                     Task::none()
                 }
             }
-            Message::LoginSuccess(account) => {
+            Message::LoginSuccess => {
                 self.login_error = None;
-                let path = crate::defaults::get_data_path().join("accounts.json");
-
-                if let Ok(mut store) = tokio::runtime::Runtime::new()
-                    .unwrap()
-                    .block_on(async { AccountStore::load(&Some(path.clone())).await })
-                {
-                    let _ = store.accounts_add_sync(account);
-                }
-
                 if let Some(id) = self.window_id {
                     self.two_factor_tx = None;
                     window::close(id)
@@ -215,6 +206,7 @@ impl LoginWindow {
 
         let mut content = column![
             text(t!("login_only_set_to_fruit")).size(14),
+            text(t!("login_anisette_provider")).size(14),
             text(t!("login_email")).size(14),
             email_input,
             text(t!("login_password")).size(14),
@@ -367,17 +359,16 @@ impl LoginWindow {
                         anisette_config,
                     ));
 
-                    let final_msg = match account_result {
-                        Ok(account) => {
-                            match rt.block_on(plume_store::account_from_session(
-                                email_clone.clone(),
-                                account,
-                            )) {
-                                Ok(gsa) => Message::LoginSuccess(gsa),
-                                Err(e) => Message::LoginFailed(e.to_string()),
-                            }
-                        }
-                        Err(e) => Message::LoginFailed(e.to_string()),
+                    let result = account_result.and_then(|account| {
+                        rt.block_on(async {
+                            let path = crate::defaults::get_data_path().join("accounts.json");
+                            let mut store = AccountStore::load(&Some(path)).await?;
+                            store.accounts_add_from_session(email_clone, account).await
+                        })
+                    });
+                    let final_msg = match result {
+                        Ok(()) => Message::LoginSuccess,
+                        Err(error) => Message::LoginFailed(error.to_string()),
                     };
                     let _ = bridge_tx.send(final_msg);
                 });

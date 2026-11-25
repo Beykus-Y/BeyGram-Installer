@@ -9,8 +9,8 @@ use regex::Regex;
 use zip::ZipArchive;
 
 use crate::{
-    decompressors::utils::normalize_mode, DecompressError, Decompression, Decompressor,
-    ExtractOpts, Listing,
+    DecompressError, Decompression, Decompressor, ExtractOpts, Listing,
+    decompressors::utils::normalize_mode,
 };
 
 lazy_static! {
@@ -105,7 +105,7 @@ impl Decompressor for Zip {
 
             let outpath = (opts.map)(outpath.as_path());
 
-            if file.name().ends_with('/') {
+            if file.is_dir() {
                 fs::create_dir_all(&outpath)?;
             } else {
                 if let Some(p) = outpath.parent() {

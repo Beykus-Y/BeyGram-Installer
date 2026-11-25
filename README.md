@@ -2,7 +2,7 @@
 
 Cross-platform desktop installer and lifecycle manager for BeyGram iOS, based on [Impactor](https://github.com/claration/Impactor).
 
-**Status: pre-MVP / planning. No installer is released yet.** The repository is currently independent and the Impactor upstream source has not yet been imported. See [#1](https://github.com/Beykus-Y/BeyGram-Installer/issues/1).
+**Status: MVP 0 Foundation.** DEV contains Impactor v2.7.3 and the BeyGram roadmap. The Foundation audit and checks are tracked in [Issue #1](https://github.com/Beykus-Y/BeyGram-Installer/issues/1) and [Draft PR #10](https://github.com/Beykus-Y/BeyGram-Installer/pull/10). BeyGram Installer has no published release.
 
 ## Product goal
 
@@ -64,6 +64,12 @@ Start with #1, then #2. Stages #3 and #4 may proceed in parallel after the signi
 
 ## Upstream
 
-[claration/Impactor](https://github.com/claration/Impactor) is the intended implementation base. This planning README is an independent initial commit; the upstream import issue must preserve the original git history (merge or replay this documentation commit onto the upstream-derived branch, without discarding upstream history). No upstream code has been imported yet.
+[claration/Impactor](https://github.com/claration/Impactor) is the implementation base. Its history and the original BeyGram planning history meet in the DEV import merge. See [upstream synchronization](docs/UPSTREAM.md) and the [original Impactor README](.github/README.md).
+
+## Foundation documentation
+
+- [Architecture](docs/ARCHITECTURE.md), [signing and renewal](docs/SIGNING.md), and [platform compatibility](docs/COMPATIBILITY.md)
+- [Build and verification](docs/BUILD.md), [security](docs/SECURITY.md), and [licensing](docs/LICENSES.md)
+- [MVP 0 report](docs/MVP0_REPORT.md) and [handoff](docs/HANDOFF.md)
 
 See [Issues](https://github.com/Beykus-Y/BeyGram-Installer/issues) for Russian-language implementation requirements and acceptance criteria.

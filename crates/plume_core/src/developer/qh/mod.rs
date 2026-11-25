@@ -30,17 +30,10 @@ pub struct QHResponseMeta {
 }
 
 impl QHResponseMeta {
-    pub fn to_error(self, url: String) -> crate::Error {
-        let message = self
-            .user_string
-            .or(self.result_string)
-            .unwrap_or_else(|| "Unknown API error".to_string());
-
+    pub fn to_error(&self) -> crate::Error {
         crate::Error::DeveloperApi {
-            url,
             result_code: self.result_code.as_signed().unwrap_or(0),
             http_code: self.http_code.and_then(|c| c.as_signed().map(|v| v as u16)),
-            message,
         }
     }
 }

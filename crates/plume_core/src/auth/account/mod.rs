@@ -16,15 +16,15 @@ pub async fn parse_response(
 ) -> Result<plist::Dictionary, Error> {
     let res = res?;
     let status = res.status();
-    
+
     if !status.is_success() {
         return Err(Error::GeneralHttpError {
             url: res.url().to_string(),
             status: status.as_u16(),
             // body: res.text().await?,
-        })
+        });
     }
-    
+
     let text = res.text().await?;
     let res: plist::Dictionary = plist::from_bytes(text.as_bytes())?;
     let res: plist::Value = res.get("Response").unwrap().to_owned();
@@ -43,7 +43,7 @@ pub fn check_error(res: &plist::Dictionary) -> Result<(), Error> {
     if res.get("ec").unwrap().as_signed_integer().unwrap() != 0 {
         return Err(Error::AuthSrpWithMessage(
             res.get("ec").unwrap().as_signed_integer().unwrap().into(),
-            res.get("em").unwrap().as_string().unwrap().to_owned(),
+            "Apple authentication failed".to_owned(),
         ));
     }
 
