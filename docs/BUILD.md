@@ -1,6 +1,6 @@
 # Build and check Impactor
 
-Use the pinned Foundation CI toolchain, Rust 1.100.0 with rustfmt and Clippy. The upstream [contribution guide](../.github/CONTRIBUTING.md) describes CMake and C++ requirements. The release workflow is authoritative for packaging.
+Use the pinned Foundation CI toolchain, Rust 1.100.0 with rustfmt and Clippy. CI sets `CARGO_PROFILE_DEV_DEBUG=0` and `CARGO_PROFILE_TEST_DEBUG=0` to reduce build storage. The upstream [contribution guide](../.github/CONTRIBUTING.md) describes CMake and C++ requirements. The release workflow is authoritative for packaging.
 
 - Ubuntu/Debian: install a C/C++ toolchain, CMake, pkg-config and the GTK/tray and graphics development packages. On Ubuntu 24.04, use the list in [Foundation CI](../.github/workflows/foundation.yml). On Debian 13 substitute `libayatana-appindicator3-dev` for `libappindicator3-dev`. On Fedora use the upstream development packages and the distro equivalents for secret storage and tray dependencies.
 - Windows: install Visual Studio 2022 Build Tools with C++ and the Windows SDK. The native Foundation CI runner uses MSVC. Upstream x86/x64 packaging cross-compiles GNU targets from Linux using MinGW and NASM, while upstream ARM64 builds natively with MSVC. `package/windows/installer.nsi` feeds NSIS.
@@ -28,7 +28,19 @@ Upstream developer entry points are `cargo run --bin plumeimpactor` and `cargo r
 - Local Debian 13 x86_64 with Rust 1.100.0. Locked workspace and full dependency metadata succeeded. `cargo fmt --all -- --check` exited 1 with diffs in 13 upstream source files. Source formatting is preserved for baseline comparison.
 - RustSec lockfile scan completed with findings. See [Security](SECURITY.md).
 - The original [v2.7.3 upstream release run](https://github.com/claration/impactor/actions/runs/43990731025) succeeded. It covered both Linux architectures, two GNU Windows cross targets, native ARM64 Windows, NSIS, macOS slices and a universal DMG. That is upstream build and packaging evidence.
-- The [first Foundation PR check](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs/45551693517) reproduced the format failure and built both workspace binaries natively on Ubuntu, Windows and macOS. Linux workspace test and Clippy compilation failed on an unconditional CoreFoundation framework link in `plume_gestalt`. Windows hit the same portability issue in workspace checks. On macOS, Clippy completed with upstream warnings. Workspace tests reached two failing live Anisette cases: missing local StoreServicesCore libraries and no process-level Rustls crypto provider in the remote test harness.
-- Commit [04f9eb8](https://github.com/Beykus-Y/BeyGram-Installer/commit/04f9eb84736e52c6cb5e7c5aa6da762cbc550751) scopes `plume_gestalt` to macOS. Linux `cargo test --locked -p plume_gestalt` completed successfully, with no unit cases in that crate. See [post-fix CI](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs/45552335480) for the complete native rerun.
-- The local native host lacks GTK development libraries and system package installation privileges. A Debian 13 Linux container build is in progress. The full Rust container image failed to start for lack of disk space and was removed. The smaller Debian image uses the locally installed Rust toolchain.
+- The [first Foundation PR check](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs/45551693517) built both binaries on all three runners. Windows and Linux workspace tests and Clippy could not compile `plume_gestalt` because its build script unconditionally linked CoreFoundation. Commit [04f9eb8](https://github.com/Beykus-Y/BeyGram-Installer/commit/04f9eb84736e52c6cb5e7c5aa6da762cbc550751) scopes the framework and the bindings to macOS. Linux `cargo test --locked --offline -p plume_gestalt` completed successfully, with zero unit cases in that crate.
+- Local Debian host package installation requires permissions unavailable in this session. The first full Linux container could not start due to disk limits. A smaller Debian container later hit the same limit during compilation. A retry with fewer native packages is running.
 - No Windows or macOS developer machine, iPhone, Apple credentials or live signing acceptance session was used. The `omnisette` workspace tests exercise live Anisette providers. The vendored `apple-codesign` test suite exists outside the listed workspace members and runs separately from `cargo test --workspace`.
+
+
+### Native Foundation CI after the framework fix
+
+The [post-fix PR run](https://github.com/Beykus-Y/BeyGram-Installer/actions/runs/45552335480) exercised the following checks on commit `04f9eb8`.
+
+| Runner | Workspace metadata | Both workspace binaries | Workspace tests | Clippy |
+|---|---|---|---|---|
+| Ubuntu 24.04 | Passed | Built | Two Anisette failures | Passed with warnings |
+| Windows Server 2022 | Passed | Built | Two Anisette failures | Passed with warnings |
+| macOS 15 | Passed | Built | Two Anisette failures | Passed with warnings |
+
+On all three runners, `store_services_core::tests::fetch_anisette_ssc_async` returned `MissingLibraries`. `remote_anisette_v3::tests::fetch_anisette_remote_v3` failed because Rustls could not choose a process-level crypto provider. The GUI and CLI binaries explicitly install one, while the test harness does not. Reproduce these cases with `cargo +1.100.0 test --locked -p omnisette --lib --features remote-anisette-v3`. The format job still reports the upstream differences. None of these checks was disabled.

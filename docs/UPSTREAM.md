@@ -2,7 +2,7 @@
 
 [Impactor v2.7.3](https://github.com/claration/Impactor/releases/tag/v2.7.3) was published on November 17, 2026. Its commit, `2ba32ea43246bd4db0265eb3120d3c72e39f5b22`, was also the tip of upstream's default development branch `main` on November 25. The preceding stable releases were v2.7.2 and v2.7.1. Using the current stable commit ties the audit to a published baseline without taking unreleased changes.
 
-DEV starts with merge commit `bc0320389fe6d540b28a291c757c91c39d3ecffe`. Its first parent is the BeyGram planning commit `7d44044be60ddc5fa758709d37d81ced8dc7499c`. Its second parent is the original upstream commit. The full ancestry of both parents remains reachable with original commit SHAs and authors. Upstream topic branches are fetched locally for inspection. Upstream tags are intentionally kept local because the imported release workflow listens for version tags.
+DEV starts with merge commit `bc0320389fe6d540b28a291c757c91c39d3ecffe`. Its first parent is the BeyGram planning commit `7d44044be60ddc5fa758709d37d81ced8dc7499c`. Its second parent is the original upstream commit. The full ancestry of both parents remains reachable with original commit SHAs and authors. The selected upstream commit has 288 reachable commits in the full clone. Upstream topic branches are fetched locally for inspection. Upstream tags are intentionally kept local because the imported release workflow listens for version tags.
 
 Configure each clone with the upstream remote and use a review branch for synchronization:
 
